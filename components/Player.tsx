@@ -58,6 +58,9 @@ export default function Player() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const prefetchAbortRef = useRef<AbortController | null>(null);
+  // Latches intent to auto-play across chunk/chapter transitions, even if the
+  // browser fires `pause` while the next source is still loading.
+  const wantPlayRef = useRef(false);
 
   useEffect(() => {
     const savedUrl = localStorage.getItem(LS_URL);
@@ -256,14 +259,22 @@ export default function Player() {
   useEffect(() => {
     const a = audioRef.current;
     if (!a || !audioSrc) return;
-    a.load();
-    if (isPlaying) a.play().catch(() => setIsPlaying(false));
+    if (wantPlayRef.current || isPlaying) {
+      wantPlayRef.current = false;
+      a.play()
+        .then(() => setIsPlaying(true))
+        .catch(() => setIsPlaying(false));
+    }
   }, [audioSrc, isPlaying]);
 
   const onEnded = useCallback(() => {
     if (!current) return;
     const nextIdx = currentChunkIndex + 1;
-    if (nextIdx < current.chunks.length) return setCurrentChunkIndex(nextIdx);
+    if (nextIdx < current.chunks.length) {
+      wantPlayRef.current = true;
+      setCurrentChunkIndex(nextIdx);
+      return;
+    }
     if (nextPrefetch) {
       if (current)
         for (const c of current.chunks) if (c.blobUrl) URL.revokeObjectURL(c.blobUrl);
@@ -271,10 +282,14 @@ export default function Player() {
       setNextPrefetch(null);
       setCurrentChunkIndex(0);
       localStorage.setItem(LS_URL, nextPrefetch.chapter.url);
+      wantPlayRef.current = true;
       setIsPlaying(true);
       return;
     }
-    if (current.chapter.nextUrl) return void loadChapterFromUrl(current.chapter.nextUrl, true);
+    if (current.chapter.nextUrl) {
+      wantPlayRef.current = true;
+      return void loadChapterFromUrl(current.chapter.nextUrl, true);
+    }
     setIsPlaying(false);
   }, [current, currentChunkIndex, nextPrefetch, loadChapterFromUrl]);
 
@@ -545,7 +560,14 @@ export default function Player() {
         onEnded={onEnded}
         onLoadedMetadata={onLoadedMetadata}
         onTimeUpdate={onTimeUpdate}
-        onPause={() => setIsPlaying(false)}
+        onPause={() => {
+          // Ignore pause events that fire while we're mid-transition to the
+          // next chunk (no src yet or we already intend to play as soon as it
+          // loads). This keeps auto-advance working even if the next chunk's
+          // TTS hasn't finished yet.
+          if (wantPlayRef.current || !audioSrc) return;
+          setIsPlaying(false);
+        }}
         onPlay={() => setIsPlaying(true)}
         preload="auto"
         playsInline
