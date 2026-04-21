@@ -2,9 +2,12 @@ export function Header(props: {
   showLibraryToggle: boolean;
   onOpenLibrary: () => void;
   onOpenSettings: () => void;
+  playerBarVisible: boolean;
+  onTogglePlayerBar: () => void;
+  hasChapter: boolean;
 }) {
   return (
-    <header className="sticky top-0 z-20 border-b border-[var(--color-border)] bg-[var(--color-bg)]/80 backdrop-blur-md">
+    <header className="z-20 shrink-0 border-b border-[var(--color-border)] bg-[var(--color-bg)]/80 backdrop-blur-md">
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3">
         <div className="flex items-center gap-2.5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -12,6 +15,15 @@ export function Header(props: {
           <span className="text-sm font-semibold tracking-tight">Tome</span>
         </div>
         <div className="flex items-center gap-1">
+          {props.hasChapter && (
+            <IconButton
+              label={props.playerBarVisible ? "Hide player" : "Show player"}
+              onClick={props.onTogglePlayerBar}
+              active={props.playerBarVisible}
+            >
+              <PlayerIcon />
+            </IconButton>
+          )}
           {props.showLibraryToggle && (
             <IconButton label="Library" onClick={props.onOpenLibrary}>
               <LibraryIcon />
@@ -30,15 +42,42 @@ function IconButton(props: {
   label: string;
   onClick: () => void;
   children: React.ReactNode;
+  active?: boolean;
 }) {
   return (
     <button
       aria-label={props.label}
+      aria-pressed={props.active}
+      title={props.label}
       onClick={props.onClick}
-      className="grid h-9 w-9 place-items-center rounded-full text-[var(--color-text)]/80 transition hover:bg-white/5 hover:text-[var(--color-text)]"
+      className={`grid h-9 w-9 place-items-center rounded-full transition hover:bg-white/5 hover:text-[var(--color-text)] ${
+        props.active
+          ? "text-[var(--color-accent)]"
+          : "text-[var(--color-text)]/80"
+      }`}
     >
       {props.children}
     </button>
+  );
+}
+
+function PlayerIcon() {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M4 12a8 8 0 0 1 16 0" />
+      <rect x="3" y="12" width="5" height="7" rx="1.5" />
+      <rect x="16" y="12" width="5" height="7" rx="1.5" />
+    </svg>
   );
 }
 

@@ -25,7 +25,7 @@ export function ReaderPanel(props: {
 
   return (
     <div
-      className="relative max-h-[58dvh] overflow-y-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] px-5 py-5 sm:px-8 sm:py-7"
+      className="relative h-full overflow-y-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] px-5 py-5 sm:px-8 sm:py-7"
       style={{ fontSize: `${readerFontSize}px` }}
     >
       <div className="mx-auto max-w-prose font-serif">

@@ -36,6 +36,7 @@ const LS_SPEED = "nab:speed";
 const LS_POSITION_PREFIX = "nab:pos:";
 const LS_HISTORY = "nab:history";
 const LS_READER_FONT = "nab:readerFont";
+const LS_PLAYER_VISIBLE = "nab:playerVisible";
 
 export default function Player() {
   const [inputUrl, setInputUrl] = useState("");
@@ -54,6 +55,7 @@ export default function Player() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [playerBarVisible, setPlayerBarVisible] = useState(true);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -68,6 +70,7 @@ export default function Player() {
     const savedSpeed = localStorage.getItem(LS_SPEED);
     const savedHistory = localStorage.getItem(LS_HISTORY);
     const savedFont = localStorage.getItem(LS_READER_FONT);
+    const savedPlayerVisible = localStorage.getItem(LS_PLAYER_VISIBLE);
     if (savedUrl) setInputUrl(savedUrl);
     if (savedVoice) setVoice(savedVoice);
     if (savedSpeed) {
@@ -85,6 +88,7 @@ export default function Player() {
       const n = parseInt(savedFont, 10);
       if (!Number.isNaN(n)) setReaderFontSize(n);
     }
+    if (savedPlayerVisible === "0") setPlayerBarVisible(false);
   }, []);
 
   useEffect(() => localStorage.setItem(LS_VOICE, voice), [voice]);
@@ -96,6 +100,10 @@ export default function Player() {
   useEffect(
     () => localStorage.setItem(LS_READER_FONT, String(readerFontSize)),
     [readerFontSize],
+  );
+  useEffect(
+    () => localStorage.setItem(LS_PLAYER_VISIBLE, playerBarVisible ? "1" : "0"),
+    [playerBarVisible],
   );
 
   useEffect(() => {
@@ -459,17 +467,20 @@ export default function Player() {
   };
 
   return (
-    <div className="min-h-dvh bg-[var(--color-bg)] pb-44">
+    <div className="flex h-dvh flex-col bg-[var(--color-bg)]">
       <Header
         showLibraryToggle
         onOpenLibrary={() => setSidebarOpen(true)}
         onOpenSettings={() => setDrawerOpen(true)}
+        playerBarVisible={playerBarVisible}
+        onTogglePlayerBar={() => setPlayerBarVisible((v) => !v)}
+        hasChapter={!!current}
       />
 
       {error && <Toast message={error} onClose={() => setError(null)} />}
 
-      <div className="mx-auto grid max-w-6xl gap-6 px-4 pt-6 lg:grid-cols-[280px_1fr]">
-        <div className="hidden lg:block">
+      <div className="mx-auto grid w-full min-h-0 max-w-6xl flex-1 gap-4 px-4 py-4 lg:grid-cols-[280px_1fr]">
+        <aside className="hidden min-h-0 lg:block">
           <Sidebar
             inputUrl={inputUrl}
             onInputUrl={setInputUrl}
@@ -481,13 +492,13 @@ export default function Player() {
               void loadChapterFromUrl(url, false);
             }}
           />
-        </div>
+        </aside>
 
-        <main>
+        <main className="flex min-h-0 flex-col gap-3">
           {chapterLoading && <LoadingSkeleton />}
           {!chapterLoading && !current && <EmptyState />}
           {!chapterLoading && current && (
-            <div className="space-y-5">
+            <>
               <HeroCard
                 title={current.chapter.title}
                 source={current.chapter.source}
@@ -498,17 +509,19 @@ export default function Player() {
                 onPrevChapter={goPrevChapter}
                 onNextChapter={goNextChapter}
               />
-              <ReaderPanel
-                chunks={current.chunks}
-                currentChunkIndex={currentChunkIndex}
-                onPickChunk={(index) =>
-                  setCurrentChunkIndex(
-                    Math.max(0, Math.min(current.chunks.length - 1, index)),
-                  )
-                }
-                readerFontSize={readerFontSize}
-              />
-              <div className="flex items-center justify-between">
+              <div className="min-h-0 flex-1">
+                <ReaderPanel
+                  chunks={current.chunks}
+                  currentChunkIndex={currentChunkIndex}
+                  onPickChunk={(index) =>
+                    setCurrentChunkIndex(
+                      Math.max(0, Math.min(current.chunks.length - 1, index)),
+                    )
+                  }
+                  readerFontSize={readerFontSize}
+                />
+              </div>
+              <div className="flex shrink-0 items-center justify-between">
                 <button
                   onClick={() => setShortcutsOpen((v) => !v)}
                   className="text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
@@ -517,14 +530,14 @@ export default function Player() {
                 </button>
               </div>
               {shortcutsOpen && (
-                <div className="grid gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)] p-3 text-xs text-[var(--color-muted)]">
+                <div className="grid shrink-0 gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)] p-3 text-xs text-[var(--color-muted)]">
                   <div>Space — Play/Pause</div>
                   <div>Arrow Left/Right — -/+ 15s</div>
                   <div>[ / ] — Previous/Next chapter</div>
                   <div>? — Toggle this help</div>
                 </div>
               )}
-            </div>
+            </>
           )}
         </main>
       </div>
@@ -573,33 +586,53 @@ export default function Player() {
         playsInline
       />
 
-      <PlayerBar
-        hasChapter={!!current}
-        title={current?.chapter.title ?? ""}
-        source={current?.chapter.source ?? ""}
-        isPlaying={isPlaying}
-        progressPercent={progressPercent}
-        currentTime={chunkPosition}
-        duration={chunkDuration}
-        onSeek={seekTo}
-        onTogglePlay={togglePlay}
-        onSkipBack={() => seekSeconds(-15)}
-        onSkipFwd={() => seekSeconds(15)}
-        onPrevChapter={goPrevChapter}
-        onNextChapter={goNextChapter}
-        canPrevChapter={!!current?.chapter.prevUrl}
-        canNextChapter={!!current?.chapter.nextUrl}
-        currentChunkIndex={currentChunkIndex}
-        totalChunks={current?.chunks.length ?? 0}
-        currentChunkStatus={currentChunk?.status ?? "pending"}
-        prefetchReady={
-          !!nextPrefetch?.chunks[0] && nextPrefetch.chunks[0].status === "ready"
-        }
-        onPickChunk={(i) =>
-          current &&
-          setCurrentChunkIndex(Math.max(0, Math.min(current.chunks.length - 1, i)))
-        }
-      />
+      {playerBarVisible && (
+        <PlayerBar
+          hasChapter={!!current}
+          title={current?.chapter.title ?? ""}
+          source={current?.chapter.source ?? ""}
+          isPlaying={isPlaying}
+          progressPercent={progressPercent}
+          currentTime={chunkPosition}
+          duration={chunkDuration}
+          onSeek={seekTo}
+          onTogglePlay={togglePlay}
+          onSkipBack={() => seekSeconds(-15)}
+          onSkipFwd={() => seekSeconds(15)}
+          onPrevChapter={goPrevChapter}
+          onNextChapter={goNextChapter}
+          canPrevChapter={!!current?.chapter.prevUrl}
+          canNextChapter={!!current?.chapter.nextUrl}
+          currentChunkIndex={currentChunkIndex}
+          totalChunks={current?.chunks.length ?? 0}
+          currentChunkStatus={currentChunk?.status ?? "pending"}
+          prefetchReady={
+            !!nextPrefetch?.chunks[0] && nextPrefetch.chunks[0].status === "ready"
+          }
+          onPickChunk={(i) =>
+            current &&
+            setCurrentChunkIndex(Math.max(0, Math.min(current.chunks.length - 1, i)))
+          }
+        />
+      )}
+
+      {!playerBarVisible && current && (
+        <button
+          onClick={() => setPlayerBarVisible(true)}
+          aria-label="Show player"
+          className="fixed bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border border-[var(--color-border)] bg-[var(--color-panel)]/90 px-4 py-2 text-xs font-medium text-[var(--color-text)]/90 shadow-lg backdrop-blur-md transition hover:border-white/20 hover:text-[var(--color-text)]"
+        >
+          <span
+            aria-hidden
+            className={`inline-block h-1.5 w-1.5 rounded-full ${
+              isPlaying
+                ? "bg-[var(--color-accent)] animate-pulse"
+                : "bg-[var(--color-muted)]"
+            }`}
+          />
+          Show player
+        </button>
+      )}
 
       <SettingsDrawer
         open={drawerOpen}
