@@ -1,7 +1,3 @@
-"use client";
-
-import { useEffect, useRef, useState } from "react";
-
 export function Header(props: {
   showLibraryToggle: boolean;
   onOpenLibrary: () => void;
@@ -10,137 +6,66 @@ export function Header(props: {
   onTogglePlayerBar: () => void;
   hasChapter: boolean;
 }) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (!menuRef.current) return;
-      if (!menuRef.current.contains(e.target as Node)) setMenuOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMenuOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [menuOpen]);
-
   return (
-    <header className="safe-top safe-left safe-right z-20 shrink-0 bg-[var(--color-bg)]/70 backdrop-blur-md">
-      <div className="flex items-center justify-between gap-4 px-4 py-2 sm:px-6 lg:px-8">
-        <div className="flex items-center">
+    <header className="z-20 shrink-0 border-b border-[var(--color-border)] bg-[var(--color-bg)]/80 backdrop-blur-md">
+      <div className="flex items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
+        <div className="flex items-center gap-2.5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/logo.png"
-            alt="Tome"
-            className="h-8 w-8 select-none"
-            draggable={false}
-          />
+          <img src="/logo.png" alt="" aria-hidden className="h-7 w-7" />
+          <span className="text-sm font-semibold tracking-tight">Tome</span>
         </div>
-
-        <div className="relative flex items-center" ref={menuRef}>
-          <button
-            onClick={() => setMenuOpen((v) => !v)}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            aria-label="Menu"
-            title="Menu"
-            className="grid h-9 w-9 place-items-center rounded-full text-[var(--color-text)]/85 transition hover:bg-white/5 hover:text-[var(--color-text)]"
-          >
-            <MenuIcon />
-          </button>
-
-          {menuOpen && (
-            <div
-              role="menu"
-              className="absolute right-0 top-full z-30 mt-2 w-56 rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)] p-1.5 shadow-xl"
+        <div className="flex items-center gap-1">
+          {props.hasChapter && (
+            <IconButton
+              label={props.playerBarVisible ? "Hide player" : "Show player"}
+              onClick={props.onTogglePlayerBar}
+              active={props.playerBarVisible}
             >
-              {props.showLibraryToggle && (
-                <MenuRow
-                  onClick={() => {
-                    props.onOpenLibrary();
-                    setMenuOpen(false);
-                  }}
-                  icon={<LibraryIcon />}
-                  label="Library"
-                />
-              )}
-              {props.hasChapter && (
-                <MenuRow
-                  onClick={() => {
-                    props.onTogglePlayerBar();
-                    setMenuOpen(false);
-                  }}
-                  icon={<PlayerIcon />}
-                  label={props.playerBarVisible ? "Hide player bar" : "Show player bar"}
-                  active={props.playerBarVisible}
-                />
-              )}
-              <MenuRow
-                onClick={() => {
-                  props.onOpenSettings();
-                  setMenuOpen(false);
-                }}
-                icon={<SettingsIcon />}
-                label="Settings"
-              />
-            </div>
+              <PlayerIcon />
+            </IconButton>
           )}
+          {props.showLibraryToggle && (
+            <IconButton label="Library" onClick={props.onOpenLibrary}>
+              <LibraryIcon />
+            </IconButton>
+          )}
+          <IconButton label="Settings" onClick={props.onOpenSettings}>
+            <SettingsIcon />
+          </IconButton>
         </div>
       </div>
     </header>
   );
 }
 
-function MenuRow(props: {
-  icon: React.ReactNode;
+function IconButton(props: {
   label: string;
   onClick: () => void;
+  children: React.ReactNode;
   active?: boolean;
 }) {
   return (
     <button
-      role="menuitem"
+      aria-label={props.label}
+      aria-pressed={props.active}
+      title={props.label}
       onClick={props.onClick}
-      className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-xs transition hover:bg-white/5 ${
-        props.active ? "text-[var(--color-accent)]" : "text-[var(--color-text)]/90"
+      className={`grid h-9 w-9 place-items-center rounded-full transition hover:bg-white/5 hover:text-[var(--color-text)] ${
+        props.active
+          ? "text-[var(--color-accent)]"
+          : "text-[var(--color-text)]/80"
       }`}
     >
-      <span className="inline-grid h-5 w-5 place-items-center">{props.icon}</span>
-      <span className="flex-1">{props.label}</span>
-      {props.active && <span aria-hidden>●</span>}
+      {props.children}
     </button>
-  );
-}
-
-function MenuIcon() {
-  return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d="M4 7h16M4 12h16M4 17h16" />
-    </svg>
   );
 }
 
 function PlayerIcon() {
   return (
     <svg
-      width="16"
-      height="16"
+      width="18"
+      height="18"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -159,8 +84,8 @@ function PlayerIcon() {
 function LibraryIcon() {
   return (
     <svg
-      width="16"
-      height="16"
+      width="18"
+      height="18"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -178,8 +103,8 @@ function LibraryIcon() {
 function SettingsIcon() {
   return (
     <svg
-      width="16"
-      height="16"
+      width="18"
+      height="18"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"

@@ -27,10 +27,10 @@ export function ReaderPanel(props: {
 
   return (
     <div
-      className="relative h-full overflow-y-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] px-6 py-6 sm:px-14 sm:py-10 lg:px-24 xl:px-32"
+      className="relative h-full overflow-y-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] px-5 py-6 sm:px-10 sm:py-8"
       style={{ fontSize: `${readerFontSize}px` }}
     >
-      <div className="mx-auto max-w-[110ch]">
+      <div className="mx-auto max-w-3xl">
         {header}
         <div className="font-serif">
           {chunks.map((c) => {
