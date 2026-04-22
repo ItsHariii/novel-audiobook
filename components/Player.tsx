@@ -11,6 +11,7 @@ import { PlayerBar } from "@/components/player/PlayerBar";
 import { ReaderPanel } from "@/components/player/ReaderPanel";
 import { SettingsDrawer } from "@/components/player/SettingsDrawer";
 import { Sidebar } from "@/components/player/Sidebar";
+import type { SleepMode } from "@/components/player/SleepTimerButton";
 import { Toast } from "@/components/player/Toast";
 import type {
   Chunk,
@@ -56,6 +57,8 @@ export default function Player() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [playerBarVisible, setPlayerBarVisible] = useState(true);
+  const [sleep, setSleep] = useState<SleepMode>(null);
+  const [sleepRemainingMs, setSleepRemainingMs] = useState(0);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -112,6 +115,56 @@ export default function Player() {
     a.playbackRate = playbackRate;
     (a as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = true;
   }, [playbackRate, current]);
+
+  // Sleep timer: ticks the time-based mode, fades volume in the final 10s,
+  // and pauses when time runs out. For "chunk"/"chapter" modes we just
+  // surface the label; the actual stop happens inside onEnded.
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!sleep) {
+      setSleepRemainingMs(0);
+      if (a && a.volume < 1) a.volume = 1;
+      return;
+    }
+    if (sleep.kind !== "time") {
+      setSleepRemainingMs(0);
+      if (a && a.volume < 1) a.volume = 1;
+      return;
+    }
+    const endsAt = sleep.endsAt;
+    const FADE_MS = 10_000;
+    const tick = () => {
+      const remaining = endsAt - Date.now();
+      setSleepRemainingMs(Math.max(0, remaining));
+      const el = audioRef.current;
+      if (el) {
+        if (remaining < FADE_MS && remaining > 0) {
+          el.volume = Math.max(0, remaining / FADE_MS);
+        } else if (el.volume < 1) {
+          el.volume = 1;
+        }
+      }
+      if (remaining <= 0) {
+        if (el) {
+          el.pause();
+          el.volume = 1;
+        }
+        wantPlayRef.current = false;
+        setIsPlaying(false);
+        setSleep(null);
+      }
+    };
+    tick();
+    const id = window.setInterval(tick, 250);
+    return () => window.clearInterval(id);
+  }, [sleep]);
+
+  const cancelSleep = useCallback(() => {
+    const a = audioRef.current;
+    if (a && a.volume < 1) a.volume = 1;
+    setSleep(null);
+    setSleepRemainingMs(0);
+  }, []);
 
   const fetchChapter = useCallback(
     async (url: string, signal?: AbortSignal): Promise<Chapter> => {
@@ -278,11 +331,29 @@ export default function Player() {
   const onEnded = useCallback(() => {
     if (!current) return;
     const nextIdx = currentChunkIndex + 1;
+
+    // Sleep timer: stop at the end of the current part.
+    if (sleep?.kind === "chunk") {
+      wantPlayRef.current = false;
+      setIsPlaying(false);
+      setSleep(null);
+      return;
+    }
+
     if (nextIdx < current.chunks.length) {
       wantPlayRef.current = true;
       setCurrentChunkIndex(nextIdx);
       return;
     }
+
+    // Sleep timer: stop at the end of the chapter (final chunk just ended).
+    if (sleep?.kind === "chapter") {
+      wantPlayRef.current = false;
+      setIsPlaying(false);
+      setSleep(null);
+      return;
+    }
+
     if (nextPrefetch) {
       if (current)
         for (const c of current.chunks) if (c.blobUrl) URL.revokeObjectURL(c.blobUrl);
@@ -299,7 +370,7 @@ export default function Player() {
       return void loadChapterFromUrl(current.chapter.nextUrl, true);
     }
     setIsPlaying(false);
-  }, [current, currentChunkIndex, nextPrefetch, loadChapterFromUrl]);
+  }, [current, currentChunkIndex, nextPrefetch, loadChapterFromUrl, sleep]);
 
   const togglePlay = useCallback(async () => {
     const a = audioRef.current;
@@ -479,7 +550,7 @@ export default function Player() {
 
       {error && <Toast message={error} onClose={() => setError(null)} />}
 
-      <div className="mx-auto grid w-full min-h-0 max-w-6xl flex-1 gap-4 px-4 py-4 lg:grid-cols-[280px_1fr]">
+      <div className="grid w-full min-h-0 flex-1 gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[300px_1fr] lg:gap-6 lg:px-8">
         <aside className="hidden min-h-0 lg:block">
           <Sidebar
             inputUrl={inputUrl}
@@ -499,16 +570,6 @@ export default function Player() {
           {!chapterLoading && !current && <EmptyState />}
           {!chapterLoading && current && (
             <>
-              <HeroCard
-                title={current.chapter.title}
-                source={current.chapter.source}
-                currentPart={currentChunkIndex + 1}
-                totalParts={current.chunks.length}
-                canPrevChapter={!!current.chapter.prevUrl}
-                canNextChapter={!!current.chapter.nextUrl}
-                onPrevChapter={goPrevChapter}
-                onNextChapter={goNextChapter}
-              />
               <div className="min-h-0 flex-1">
                 <ReaderPanel
                   chunks={current.chunks}
@@ -519,6 +580,18 @@ export default function Player() {
                     )
                   }
                   readerFontSize={readerFontSize}
+                  header={
+                    <HeroCard
+                      title={current.chapter.title}
+                      source={current.chapter.source}
+                      currentPart={currentChunkIndex + 1}
+                      totalParts={current.chunks.length}
+                      canPrevChapter={!!current.chapter.prevUrl}
+                      canNextChapter={!!current.chapter.nextUrl}
+                      onPrevChapter={goPrevChapter}
+                      onNextChapter={goNextChapter}
+                    />
+                  }
                 />
               </div>
               <div className="flex shrink-0 items-center justify-between">
@@ -589,8 +662,6 @@ export default function Player() {
       {playerBarVisible && (
         <PlayerBar
           hasChapter={!!current}
-          title={current?.chapter.title ?? ""}
-          source={current?.chapter.source ?? ""}
           isPlaying={isPlaying}
           progressPercent={progressPercent}
           currentTime={chunkPosition}
@@ -613,6 +684,10 @@ export default function Player() {
             current &&
             setCurrentChunkIndex(Math.max(0, Math.min(current.chunks.length - 1, i)))
           }
+          sleep={sleep}
+          sleepRemainingMs={sleepRemainingMs}
+          onSleepSet={setSleep}
+          onSleepCancel={cancelSleep}
         />
       )}
 

@@ -8,7 +8,7 @@ export function Header(props: {
 }) {
   return (
     <header className="z-20 shrink-0 border-b border-[var(--color-border)] bg-[var(--color-bg)]/80 backdrop-blur-md">
-      <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3">
+      <div className="flex items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
         <div className="flex items-center gap-2.5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo.png" alt="" aria-hidden className="h-7 w-7" />

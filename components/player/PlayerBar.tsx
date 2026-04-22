@@ -1,5 +1,6 @@
 import type { ChunkStatus } from "@/components/player/types";
 import { ChunkDots } from "@/components/player/ChunkDots";
+import { SleepTimerButton, type SleepMode } from "@/components/player/SleepTimerButton";
 
 function fmt(secs: number): string {
   if (!Number.isFinite(secs) || secs <= 0) return "0:00";
@@ -10,8 +11,6 @@ function fmt(secs: number): string {
 
 export function PlayerBar(props: {
   hasChapter: boolean;
-  title: string;
-  source: string;
   isPlaying: boolean;
   progressPercent: number;
   currentTime: number;
@@ -29,6 +28,10 @@ export function PlayerBar(props: {
   currentChunkStatus: ChunkStatus;
   prefetchReady: boolean;
   onPickChunk: (i: number) => void;
+  sleep: SleepMode;
+  sleepRemainingMs: number;
+  onSleepSet: (mode: Exclude<SleepMode, null>) => void;
+  onSleepCancel: () => void;
 }) {
   const status =
     props.currentChunkStatus === "ready"
@@ -48,74 +51,63 @@ export function PlayerBar(props: {
         />
       </div>
 
-      <div className="mx-auto grid max-w-6xl grid-cols-[1fr_auto_1fr] items-center gap-6 px-4 py-3 sm:px-6">
-        <div className="min-w-0 pr-2">
-          <p className="truncate text-sm font-medium">
-            {props.title || "No chapter selected"}
-          </p>
-          <p className="truncate text-xs text-[var(--color-muted)]">
-            {props.source || "Paste a URL to begin"}
-          </p>
+      <div className="mx-auto flex w-full items-center gap-4 px-4 py-3 sm:gap-6 sm:px-6">
+        <div className="flex items-center gap-1">
+          <IconButton
+            onClick={props.onPrevChapter}
+            disabled={!props.canPrevChapter}
+            label="Previous chapter"
+          >
+            <PrevIcon />
+          </IconButton>
+          <IconButton
+            onClick={props.onSkipBack}
+            disabled={!props.hasChapter}
+            label="Back 15 seconds"
+          >
+            <Back15Icon />
+          </IconButton>
+          <button
+            onClick={props.onTogglePlay}
+            disabled={!props.hasChapter}
+            aria-label={props.isPlaying ? "Pause" : "Play"}
+            className="mx-1 grid h-11 w-11 place-items-center rounded-full bg-[var(--color-accent)] text-black transition hover:bg-[var(--color-accent-hover)] disabled:opacity-40"
+          >
+            {props.isPlaying ? <PauseIcon /> : <PlayIcon />}
+          </button>
+          <IconButton
+            onClick={props.onSkipFwd}
+            disabled={!props.hasChapter}
+            label="Forward 15 seconds"
+          >
+            <Fwd15Icon />
+          </IconButton>
+          <IconButton
+            onClick={props.onNextChapter}
+            disabled={!props.canNextChapter}
+            label="Next chapter"
+          >
+            <NextIcon />
+          </IconButton>
         </div>
 
-        <div className="flex flex-col items-center gap-2">
-          <div className="flex items-center gap-1">
-            <IconButton
-              onClick={props.onPrevChapter}
-              disabled={!props.canPrevChapter}
-              label="Previous chapter"
-            >
-              <PrevIcon />
-            </IconButton>
-            <IconButton
-              onClick={props.onSkipBack}
-              disabled={!props.hasChapter}
-              label="Back 15 seconds"
-            >
-              <Back15Icon />
-            </IconButton>
-            <button
-              onClick={props.onTogglePlay}
-              disabled={!props.hasChapter}
-              aria-label={props.isPlaying ? "Pause" : "Play"}
-              className="mx-1 grid h-11 w-11 place-items-center rounded-full bg-[var(--color-accent)] text-black transition hover:bg-[var(--color-accent-hover)] disabled:opacity-40"
-            >
-              {props.isPlaying ? <PauseIcon /> : <PlayIcon />}
-            </button>
-            <IconButton
-              onClick={props.onSkipFwd}
-              disabled={!props.hasChapter}
-              label="Forward 15 seconds"
-            >
-              <Fwd15Icon />
-            </IconButton>
-            <IconButton
-              onClick={props.onNextChapter}
-              disabled={!props.canNextChapter}
-              label="Next chapter"
-            >
-              <NextIcon />
-            </IconButton>
-          </div>
-
-          <div className="tabular flex items-center gap-3 text-[10.5px] text-[var(--color-muted)]">
-            <span>{fmt(props.currentTime)}</span>
-            <input
-              type="range"
-              min={0}
-              max={Math.max(props.duration, 0.1)}
-              step={0.1}
-              value={Math.min(props.currentTime, props.duration || 0)}
-              onChange={(e) => props.onSeek(parseFloat(e.target.value))}
-              disabled={!props.hasChapter}
-              className="w-48 sm:w-72"
-              aria-label="Seek"
-            />
-            <span>{fmt(props.duration)}</span>
-          </div>
+        <div className="tabular flex min-w-0 flex-1 items-center gap-3 text-[10.5px] text-[var(--color-muted)]">
+          <span className="shrink-0">{fmt(props.currentTime)}</span>
+          <input
+            type="range"
+            min={0}
+            max={Math.max(props.duration, 0.1)}
+            step={0.1}
+            value={Math.min(props.currentTime, props.duration || 0)}
+            onChange={(e) => props.onSeek(parseFloat(e.target.value))}
+            disabled={!props.hasChapter}
+            className="min-w-0 flex-1"
+            aria-label="Seek"
+          />
+          <span className="shrink-0">{fmt(props.duration)}</span>
         </div>
 
-        <div className="flex min-w-0 items-center justify-end gap-4">
+        <div className="flex items-center gap-3 sm:gap-4">
           {props.hasChapter && props.totalChunks > 0 && (
             <div className="hidden sm:block">
               <ChunkDots
@@ -131,6 +123,13 @@ export function PlayerBar(props: {
               <span className="text-[var(--color-accent)]/90">Next ready</span>
             )}
           </div>
+          <SleepTimerButton
+            sleep={props.sleep}
+            remainingMs={props.sleepRemainingMs}
+            disabled={!props.hasChapter}
+            onSet={props.onSleepSet}
+            onCancel={props.onSleepCancel}
+          />
         </div>
       </div>
     </div>
