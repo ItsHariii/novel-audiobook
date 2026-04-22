@@ -562,20 +562,26 @@ export default function Player() {
 
       {error && <Toast message={error} onClose={() => setError(null)} />}
 
-      <div className="grid w-full min-h-0 flex-1 gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[300px_1fr] lg:gap-6 lg:px-8">
-        <aside className="hidden min-h-0 lg:block">
-          <Sidebar
-            inputUrl={inputUrl}
-            onInputUrl={setInputUrl}
-            onSubmitUrl={onSubmit}
-            chapterLoading={chapterLoading}
-            history={history}
-            onPickHistory={(url) => {
-              setInputUrl(url);
-              void loadChapterFromUrl(url, false);
-            }}
-          />
-        </aside>
+      <div
+        className={`grid w-full min-h-0 flex-1 gap-4 py-4 sm:px-6 lg:gap-6 lg:px-8 ${
+          playerBarVisible ? "px-4 lg:grid-cols-[300px_1fr]" : "px-0"
+        }`}
+      >
+        {playerBarVisible && (
+          <aside className="hidden min-h-0 lg:block">
+            <Sidebar
+              inputUrl={inputUrl}
+              onInputUrl={setInputUrl}
+              onSubmitUrl={onSubmit}
+              chapterLoading={chapterLoading}
+              history={history}
+              onPickHistory={(url) => {
+                setInputUrl(url);
+                void loadChapterFromUrl(url, false);
+              }}
+            />
+          </aside>
+        )}
 
         <main className="flex min-h-0 flex-col gap-3">
           {chapterLoading && <LoadingSkeleton />}
@@ -592,6 +598,7 @@ export default function Player() {
                     )
                   }
                   readerFontSize={readerFontSize}
+                  readingMode={!playerBarVisible}
                   onUserScroll={() => setHeaderHidden(true)}
                   header={
                     <HeroCard

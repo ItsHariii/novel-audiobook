@@ -9,9 +9,17 @@ export function ReaderPanel(props: {
   readerFontSize: number;
   header?: ReactNode;
   onUserScroll?: () => void;
+  readingMode?: boolean;
 }) {
-  const { chunks, currentChunkIndex, onPickChunk, readerFontSize, header, onUserScroll } =
-    props;
+  const {
+    chunks,
+    currentChunkIndex,
+    onPickChunk,
+    readerFontSize,
+    header,
+    onUserScroll,
+    readingMode = false,
+  } = props;
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const reducedMotion = useMemo(
@@ -46,10 +54,14 @@ export function ReaderPanel(props: {
   return (
     <div
       ref={scrollRef}
-      className="relative h-full overflow-y-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] px-5 py-6 sm:px-10 sm:py-8"
+      className={
+        readingMode
+          ? "relative h-full overflow-y-auto px-4 py-6 sm:px-8 sm:py-8"
+          : "relative h-full overflow-y-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] px-5 py-6 sm:px-10 sm:py-8"
+      }
       style={{ fontSize: `${readerFontSize}px` }}
     >
-      <div className="mx-auto max-w-5xl">
+      <div className={`mx-auto ${readingMode ? "max-w-7xl" : "max-w-5xl"}`}>
         {header}
         <div className="font-serif">
           {chunks.map((c) => {
@@ -63,12 +75,12 @@ export function ReaderPanel(props: {
                 key={c.index}
                 onClick={() => onPickChunk(c.index)}
                 className={`group relative block w-full rounded-lg px-3 py-2 text-left transition ${
-                  isCurrent
+                  !readingMode && isCurrent
                     ? "bg-[var(--color-accent-soft)]"
                     : "hover:bg-white/[0.03]"
                 }`}
               >
-                {isCurrent && (
+                {!readingMode && isCurrent && (
                   <span
                     aria-hidden
                     className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-[var(--color-accent)]"
@@ -76,11 +88,13 @@ export function ReaderPanel(props: {
                 )}
                 <p
                   className={`whitespace-pre-wrap leading-[1.7] tracking-[-0.003em] ${
-                    isCurrent
-                      ? "text-[var(--color-text)]"
-                      : isPast
-                        ? "text-[var(--color-text)]/55"
-                        : "text-[var(--color-text)]/80"
+                    readingMode
+                      ? "text-[var(--color-text)]/90"
+                      : isCurrent
+                        ? "text-[var(--color-text)]"
+                        : isPast
+                          ? "text-[var(--color-text)]/55"
+                          : "text-[var(--color-text)]/80"
                   }`}
                 >
                   {c.text}
