@@ -5,14 +5,22 @@ export function Header(props: {
   playerBarVisible: boolean;
   onTogglePlayerBar: () => void;
   hasChapter: boolean;
+  hidden?: boolean;
 }) {
   return (
-    <header className="z-20 shrink-0 border-b border-[var(--color-border)] bg-[var(--color-bg)]/80 backdrop-blur-md">
-      <div className="flex items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
+    <header
+      aria-hidden={props.hidden || undefined}
+      className={`z-20 shrink-0 overflow-hidden border-b border-[var(--color-border)] bg-[var(--color-bg)]/80 backdrop-blur-md transition-all duration-200 ease-out ${
+        props.hidden
+          ? "pointer-events-none -translate-y-2 opacity-0"
+          : "translate-y-0 opacity-100"
+      }`}
+      style={{ height: props.hidden ? 0 : undefined }}
+    >
+      <div className="flex items-center justify-between gap-4 px-4 py-2.5 sm:px-6 lg:px-8">
         <div className="flex items-center gap-2.5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.png" alt="" aria-hidden className="h-7 w-7" />
-          <span className="text-sm font-semibold tracking-tight">Tome</span>
+          <img src="/logo.png" alt="Tome" className="h-10 w-10" />
         </div>
         <div className="flex items-center gap-1">
           {props.hasChapter && (

@@ -8,9 +8,12 @@ export function ReaderPanel(props: {
   onPickChunk: (i: number) => void;
   readerFontSize: number;
   header?: ReactNode;
+  onUserScroll?: () => void;
 }) {
-  const { chunks, currentChunkIndex, onPickChunk, readerFontSize, header } = props;
+  const { chunks, currentChunkIndex, onPickChunk, readerFontSize, header, onUserScroll } =
+    props;
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const reducedMotion = useMemo(
     () =>
       typeof window !== "undefined"
@@ -25,12 +28,28 @@ export function ReaderPanel(props: {
     node.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
   }, [currentChunkIndex, reducedMotion]);
 
+  // Fire `onUserScroll` only on user-initiated scroll gestures (wheel or
+  // touchmove). This skips the programmatic scrollIntoView above, which would
+  // otherwise hide the header every time the chunk auto-advances.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !onUserScroll) return;
+    const handler = () => onUserScroll();
+    el.addEventListener("wheel", handler, { passive: true });
+    el.addEventListener("touchmove", handler, { passive: true });
+    return () => {
+      el.removeEventListener("wheel", handler);
+      el.removeEventListener("touchmove", handler);
+    };
+  }, [onUserScroll]);
+
   return (
     <div
+      ref={scrollRef}
       className="relative h-full overflow-y-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] px-5 py-6 sm:px-10 sm:py-8"
       style={{ fontSize: `${readerFontSize}px` }}
     >
-      <div className="mx-auto max-w-3xl">
+      <div className="mx-auto max-w-5xl">
         {header}
         <div className="font-serif">
           {chunks.map((c) => {

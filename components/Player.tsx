@@ -57,6 +57,7 @@ export default function Player() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [playerBarVisible, setPlayerBarVisible] = useState(true);
+  const [headerHidden, setHeaderHidden] = useState(false);
   const [sleep, setSleep] = useState<SleepMode>(null);
   const [sleepRemainingMs, setSleepRemainingMs] = useState(0);
 
@@ -489,6 +490,16 @@ export default function Player() {
     setChunkPosition(a.currentTime);
   }, []);
 
+  // Tap/click anywhere brings the header back. Attached at the window level so
+  // controls, chunk jumps, etc. all reveal it — matches the user request of
+  // "come back if I just tap on screen".
+  useEffect(() => {
+    if (!headerHidden) return;
+    const onPointer = () => setHeaderHidden(false);
+    window.addEventListener("pointerdown", onPointer);
+    return () => window.removeEventListener("pointerdown", onPointer);
+  }, [headerHidden]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -546,6 +557,7 @@ export default function Player() {
         playerBarVisible={playerBarVisible}
         onTogglePlayerBar={() => setPlayerBarVisible((v) => !v)}
         hasChapter={!!current}
+        hidden={headerHidden}
       />
 
       {error && <Toast message={error} onClose={() => setError(null)} />}
@@ -580,6 +592,7 @@ export default function Player() {
                     )
                   }
                   readerFontSize={readerFontSize}
+                  onUserScroll={() => setHeaderHidden(true)}
                   header={
                     <HeroCard
                       title={current.chapter.title}
@@ -593,14 +606,6 @@ export default function Player() {
                     />
                   }
                 />
-              </div>
-              <div className="flex shrink-0 items-center justify-between">
-                <button
-                  onClick={() => setShortcutsOpen((v) => !v)}
-                  className="text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
-                >
-                  Keyboard shortcuts (?)
-                </button>
               </div>
               {shortcutsOpen && (
                 <div className="grid shrink-0 gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)] p-3 text-xs text-[var(--color-muted)]">
