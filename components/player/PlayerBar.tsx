@@ -43,7 +43,7 @@ export function PlayerBar(props: {
           : "Queued";
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-20 border-t border-[var(--color-border)] bg-[var(--color-bg)]/90 backdrop-blur-md">
+    <div className="safe-bottom safe-left safe-right fixed inset-x-0 bottom-0 z-20 border-t border-[var(--color-border)] bg-[var(--color-bg)]/90 backdrop-blur-md">
       <div className="h-[2px] w-full bg-[var(--color-border)]">
         <div
           className="h-full bg-[var(--color-accent)] transition-[width] duration-200"

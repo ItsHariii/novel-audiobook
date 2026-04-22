@@ -432,8 +432,71 @@ export default function Player() {
       title: current.chapter.title,
       artist: current.chapter.source,
       album: "Tome",
+      artwork: [
+        { src: "/logo.png", sizes: "512x512", type: "image/png" },
+        { src: "/icon.png", sizes: "256x256", type: "image/png" },
+      ],
     });
   }, [current]);
+
+  // Wire up Media Session action handlers so the iOS Dynamic Island, the
+  // Android lock screen, and hardware media keys can control playback.
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    const ms = navigator.mediaSession;
+    const setHandler = (
+      action: MediaSessionAction,
+      handler: MediaSessionActionHandler | null,
+    ) => {
+      try {
+        ms.setActionHandler(action, handler);
+      } catch {
+        // Some browsers don't support every action; silently ignore.
+      }
+    };
+    setHandler("play", () => {
+      void togglePlay();
+    });
+    setHandler("pause", () => {
+      void togglePlay();
+    });
+    setHandler("seekbackward", (d) => seekSeconds(-(d?.seekOffset ?? 15)));
+    setHandler("seekforward", (d) => seekSeconds(d?.seekOffset ?? 15));
+    setHandler("previoustrack", () => goPrevChapter());
+    setHandler("nexttrack", () => goNextChapter());
+    setHandler("seekto", (d) => {
+      if (typeof d?.seekTime === "number") seekTo(d.seekTime);
+    });
+    return () => {
+      [
+        "play",
+        "pause",
+        "seekbackward",
+        "seekforward",
+        "previoustrack",
+        "nexttrack",
+        "seekto",
+      ].forEach((a) => setHandler(a as MediaSessionAction, null));
+    };
+  }, [togglePlay, seekSeconds, goPrevChapter, goNextChapter, seekTo]);
+
+  // Keep the Dynamic Island / lock screen scrubber accurate.
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    const ms = navigator.mediaSession;
+    ms.playbackState = isPlaying ? "playing" : "paused";
+    if (typeof ms.setPositionState === "function" && chunkDuration > 0) {
+      try {
+        ms.setPositionState({
+          duration: chunkDuration,
+          position: Math.min(chunkPosition, chunkDuration),
+          playbackRate,
+        });
+      } catch {
+        // setPositionState throws if values are out of range; ignore.
+      }
+    }
+  }, [isPlaying, chunkPosition, chunkDuration, playbackRate]);
 
   useEffect(() => {
     if (!current) return;
@@ -550,7 +613,7 @@ export default function Player() {
 
       {error && <Toast message={error} onClose={() => setError(null)} />}
 
-      <div className="grid w-full min-h-0 flex-1 gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[300px_1fr] lg:gap-6 lg:px-8">
+      <div className="safe-left safe-right grid w-full min-h-0 flex-1 gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[300px_1fr] lg:gap-6 lg:px-8">
         <aside className="hidden min-h-0 lg:block">
           <Sidebar
             inputUrl={inputUrl}
