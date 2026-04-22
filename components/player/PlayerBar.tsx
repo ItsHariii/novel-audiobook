@@ -19,10 +19,6 @@ export function PlayerBar(props: {
   onTogglePlay: () => void;
   onSkipBack: () => void;
   onSkipFwd: () => void;
-  onPrevChapter: () => void;
-  onNextChapter: () => void;
-  canPrevChapter: boolean;
-  canNextChapter: boolean;
   currentChunkIndex: number;
   totalChunks: number;
   currentChunkStatus: ChunkStatus;
@@ -33,20 +29,14 @@ export function PlayerBar(props: {
   onSleepSet: (mode: Exclude<SleepMode, null>) => void;
   onSleepCancel: () => void;
 }) {
-  const status =
-    props.currentChunkStatus === "ready"
-      ? "Ready"
-      : props.currentChunkStatus === "loading"
-        ? "Loading"
-        : props.currentChunkStatus === "error"
-          ? "Error"
-          : "Queued";
+  const isLoading = props.currentChunkStatus === "loading";
+  const hasError = props.currentChunkStatus === "error";
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-20 border-t border-[var(--color-border)] bg-[var(--color-bg)]/90 backdrop-blur-md">
-      <div className="h-[2px] w-full bg-[var(--color-border)]">
+    <div className="fixed inset-x-0 bottom-0 z-20 border-t border-[var(--color-border)] bg-[var(--color-bg)]/85 backdrop-blur-xl">
+      <div className="relative h-[2px] w-full overflow-hidden bg-[var(--color-border)]">
         <div
-          className="h-full bg-[var(--color-accent)] transition-[width] duration-200"
+          className="absolute inset-y-0 left-0 bg-gradient-to-r from-[var(--color-accent)]/70 to-[var(--color-accent)] shadow-[0_0_8px_rgba(167,139,250,0.55)] transition-[width] duration-200"
           style={{ width: `${props.progressPercent}%` }}
         />
       </div>
@@ -54,27 +44,19 @@ export function PlayerBar(props: {
       <div className="mx-auto flex w-full items-center gap-4 px-4 py-3 sm:gap-6 sm:px-6">
         <div className="flex items-center gap-1">
           <IconButton
-            onClick={props.onPrevChapter}
-            disabled={!props.canPrevChapter}
-            label="Previous chapter"
-          >
-            <PrevIcon />
-          </IconButton>
-          <IconButton
             onClick={props.onSkipBack}
             disabled={!props.hasChapter}
             label="Back 15 seconds"
           >
             <Back15Icon />
           </IconButton>
-          <button
+          <PlayButton
             onClick={props.onTogglePlay}
             disabled={!props.hasChapter}
-            aria-label={props.isPlaying ? "Pause" : "Play"}
-            className="mx-1 grid h-11 w-11 place-items-center rounded-full bg-[var(--color-accent)] text-black transition hover:bg-[var(--color-accent-hover)] disabled:opacity-40"
-          >
-            {props.isPlaying ? <PauseIcon /> : <PlayIcon />}
-          </button>
+            isPlaying={props.isPlaying}
+            isLoading={isLoading && props.isPlaying}
+            hasError={hasError}
+          />
           <IconButton
             onClick={props.onSkipFwd}
             disabled={!props.hasChapter}
@@ -82,17 +64,10 @@ export function PlayerBar(props: {
           >
             <Fwd15Icon />
           </IconButton>
-          <IconButton
-            onClick={props.onNextChapter}
-            disabled={!props.canNextChapter}
-            label="Next chapter"
-          >
-            <NextIcon />
-          </IconButton>
         </div>
 
         <div className="tabular flex min-w-0 flex-1 items-center gap-3 text-[10.5px] text-[var(--color-muted)]">
-          <span className="shrink-0">{fmt(props.currentTime)}</span>
+          <span className="shrink-0 w-9 text-right">{fmt(props.currentTime)}</span>
           <input
             type="range"
             min={0}
@@ -104,7 +79,7 @@ export function PlayerBar(props: {
             className="min-w-0 flex-1"
             aria-label="Seek"
           />
-          <span className="shrink-0">{fmt(props.duration)}</span>
+          <span className="shrink-0 w-9">{fmt(props.duration)}</span>
         </div>
 
         <div className="flex items-center gap-3 sm:gap-4">
@@ -117,12 +92,13 @@ export function PlayerBar(props: {
               />
             </div>
           )}
-          <div className="hidden flex-col items-end text-[11px] text-[var(--color-muted)] md:flex">
-            <span>{status}</span>
-            {props.prefetchReady && (
-              <span className="text-[var(--color-accent)]/90">Next ready</span>
-            )}
-          </div>
+          {props.prefetchReady && (
+            <span
+              aria-label="Next chapter ready"
+              title="Next chapter ready"
+              className="hidden h-1.5 w-1.5 rounded-full bg-[var(--color-accent)] shadow-[0_0_6px_rgba(167,139,250,0.7)] md:block"
+            />
+          )}
           <SleepTimerButton
             sleep={props.sleep}
             remainingMs={props.sleepRemainingMs}
@@ -133,6 +109,42 @@ export function PlayerBar(props: {
         </div>
       </div>
     </div>
+  );
+}
+
+function PlayButton(props: {
+  onClick: () => void;
+  disabled: boolean;
+  isPlaying: boolean;
+  isLoading: boolean;
+  hasError: boolean;
+}) {
+  return (
+    <button
+      onClick={props.onClick}
+      disabled={props.disabled}
+      aria-label={props.isPlaying ? "Pause" : "Play"}
+      title={
+        props.hasError
+          ? "Playback error — tap to retry"
+          : props.isPlaying
+            ? "Pause"
+            : "Play"
+      }
+      className={`relative mx-1 grid h-12 w-12 place-items-center rounded-full text-black shadow-[0_4px_14px_rgba(167,139,250,0.35)] transition active:scale-95 disabled:opacity-40 disabled:shadow-none ${
+        props.hasError
+          ? "bg-red-400 hover:bg-red-300"
+          : "bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]"
+      }`}
+    >
+      {props.isLoading && (
+        <span
+          aria-hidden
+          className="absolute inset-[-3px] rounded-full border-2 border-[var(--color-accent)]/30 border-t-[var(--color-accent)] animate-spin"
+        />
+      )}
+      {props.isPlaying ? <PauseIcon /> : <PlayIcon />}
+    </button>
   );
 }
 
@@ -147,6 +159,7 @@ function IconButton(props: {
       onClick={props.onClick}
       disabled={props.disabled}
       aria-label={props.label}
+      title={props.label}
       className="grid h-10 w-10 place-items-center rounded-full text-[var(--color-text)]/85 transition hover:bg-white/5 hover:text-[var(--color-text)] disabled:opacity-30"
     >
       {props.children}
@@ -156,52 +169,16 @@ function IconButton(props: {
 
 function PlayIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
       <path d="M7 4.5v15a1 1 0 0 0 1.55.83l11.2-7.5a1 1 0 0 0 0-1.66L8.55 3.67A1 1 0 0 0 7 4.5Z" />
     </svg>
   );
 }
 function PauseIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
       <rect x="6.5" y="4.5" width="4" height="15" rx="1.2" />
       <rect x="13.5" y="4.5" width="4" height="15" rx="1.2" />
-    </svg>
-  );
-}
-function PrevIcon() {
-  return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d="M6 5v14" />
-      <path d="M19 5 9 12l10 7z" fill="currentColor" />
-    </svg>
-  );
-}
-function NextIcon() {
-  return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d="M18 5v14" />
-      <path d="M5 5l10 7-10 7z" fill="currentColor" />
     </svg>
   );
 }

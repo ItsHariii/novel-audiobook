@@ -682,10 +682,6 @@ export default function Player() {
           onTogglePlay={togglePlay}
           onSkipBack={() => seekSeconds(-15)}
           onSkipFwd={() => seekSeconds(15)}
-          onPrevChapter={goPrevChapter}
-          onNextChapter={goNextChapter}
-          canPrevChapter={!!current?.chapter.prevUrl}
-          canNextChapter={!!current?.chapter.nextUrl}
           currentChunkIndex={currentChunkIndex}
           totalChunks={current?.chunks.length ?? 0}
           currentChunkStatus={currentChunk?.status ?? "pending"}
