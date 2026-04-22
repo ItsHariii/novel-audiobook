@@ -600,6 +600,12 @@ export default function Player() {
                   readerFontSize={readerFontSize}
                   readingMode={!playerBarVisible}
                   onUserScroll={() => setHeaderHidden(true)}
+                  canReachEnd={!!current.chapter.nextUrl}
+                  onReachedEnd={() => {
+                    const nextUrl = current.chapter.nextUrl;
+                    if (!nextUrl) return;
+                    void loadChapterFromUrl(nextUrl, isPlaying);
+                  }}
                   header={
                     <HeroCard
                       title={current.chapter.title}

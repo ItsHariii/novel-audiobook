@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { Chunk } from "@/components/player/types";
+
+const OVERSCROLL_THRESHOLD = 160;
 
 export function ReaderPanel(props: {
   chunks: Chunk[];
@@ -10,6 +12,8 @@ export function ReaderPanel(props: {
   header?: ReactNode;
   onUserScroll?: () => void;
   readingMode?: boolean;
+  canReachEnd?: boolean;
+  onReachedEnd?: () => void;
 }) {
   const {
     chunks,
@@ -19,9 +23,23 @@ export function ReaderPanel(props: {
     header,
     onUserScroll,
     readingMode = false,
+    canReachEnd = false,
+    onReachedEnd,
   } = props;
+
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const onReachedEndRef = useRef(onReachedEnd);
+  useEffect(() => {
+    onReachedEndRef.current = onReachedEnd;
+  }, [onReachedEnd]);
+
+  const [overscroll, setOverscroll] = useState(0);
+  const overscrollRef = useRef(0);
+  const committedRef = useRef(false);
+  const touchStartYRef = useRef<number | null>(null);
+  const decayTimerRef = useRef<number | null>(null);
+
   const reducedMotion = useMemo(
     () =>
       typeof window !== "undefined"
@@ -37,8 +55,7 @@ export function ReaderPanel(props: {
   }, [currentChunkIndex, reducedMotion]);
 
   // Fire `onUserScroll` only on user-initiated scroll gestures (wheel or
-  // touchmove). This skips the programmatic scrollIntoView above, which would
-  // otherwise hide the header every time the chunk auto-advances.
+  // touchmove). Skips programmatic scrollIntoView above.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !onUserScroll) return;
@@ -50,6 +67,92 @@ export function ReaderPanel(props: {
       el.removeEventListener("touchmove", handler);
     };
   }, [onUserScroll]);
+
+  // Reset overscroll state whenever a new chapter's chunks arrive so the arc
+  // doesn't start pre-filled on the next page.
+  useEffect(() => {
+    overscrollRef.current = 0;
+    setOverscroll(0);
+    committedRef.current = false;
+  }, [chunks]);
+
+  // Pull-past-the-end gesture: once the reader is scrolled to the bottom,
+  // accumulate wheel delta / touch drag and load the next chapter once a
+  // threshold is exceeded.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !canReachEnd) return;
+
+    const isAtBottom = () => el.scrollHeight - el.scrollTop - el.clientHeight <= 2;
+    const reset = () => {
+      overscrollRef.current = 0;
+      setOverscroll(0);
+    };
+    const commit = () => {
+      if (committedRef.current) return;
+      committedRef.current = true;
+      onReachedEndRef.current?.();
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      if (committedRef.current) return;
+      if (!isAtBottom()) {
+        if (overscrollRef.current !== 0) reset();
+        return;
+      }
+      if (e.deltaY <= 0) return;
+      overscrollRef.current += e.deltaY;
+      setOverscroll(overscrollRef.current);
+      if (overscrollRef.current >= OVERSCROLL_THRESHOLD) {
+        commit();
+        return;
+      }
+      if (decayTimerRef.current) window.clearTimeout(decayTimerRef.current);
+      decayTimerRef.current = window.setTimeout(reset, 280);
+    };
+
+    const onTouchStart = (e: TouchEvent) => {
+      touchStartYRef.current = e.touches[0]?.clientY ?? null;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (committedRef.current) return;
+      if (touchStartYRef.current === null) return;
+      if (!isAtBottom()) return;
+      const delta = touchStartYRef.current - (e.touches[0]?.clientY ?? 0);
+      if (delta <= 0) {
+        if (overscrollRef.current !== 0) reset();
+        return;
+      }
+      overscrollRef.current = delta;
+      setOverscroll(delta);
+      if (delta >= OVERSCROLL_THRESHOLD) commit();
+    };
+    const onTouchEnd = () => {
+      if (!committedRef.current) reset();
+      touchStartYRef.current = null;
+    };
+    const onScroll = () => {
+      if (!isAtBottom() && overscrollRef.current !== 0) reset();
+    };
+
+    el.addEventListener("wheel", onWheel, { passive: true });
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: true });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      if (decayTimerRef.current) window.clearTimeout(decayTimerRef.current);
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
+      el.removeEventListener("scroll", onScroll);
+    };
+  }, [canReachEnd]);
+
+  const progress = Math.min(1, overscroll / OVERSCROLL_THRESHOLD);
 
   return (
     <div
@@ -102,6 +205,73 @@ export function ReaderPanel(props: {
               </button>
             );
           })}
+        </div>
+        {canReachEnd && <ChapterEndHint progress={progress} />}
+      </div>
+    </div>
+  );
+}
+
+function ChapterEndHint(props: { progress: number }) {
+  const ready = props.progress >= 1;
+  const R = 17;
+  const CIRC = 2 * Math.PI * R;
+  return (
+    <div className="mt-12 mb-6 flex select-none flex-col items-center gap-2 text-center">
+      <div className="relative h-10 w-10">
+        <svg viewBox="0 0 40 40" className="h-full w-full">
+          <circle
+            cx="20"
+            cy="20"
+            r={R}
+            fill="none"
+            stroke="var(--color-border)"
+            strokeWidth="2"
+          />
+          <circle
+            cx="20"
+            cy="20"
+            r={R}
+            fill="none"
+            stroke="var(--color-accent)"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeDasharray={CIRC}
+            strokeDashoffset={CIRC * (1 - props.progress)}
+            transform="rotate(-90 20 20)"
+            style={{ transition: "stroke-dashoffset 120ms linear" }}
+          />
+        </svg>
+        <div className="absolute inset-0 grid place-items-center text-[var(--color-text)]/75">
+          {ready ? (
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <path d="M20 6 9 17l-5-5" />
+            </svg>
+          ) : (
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <path d="M12 5v14M6 13l6 6 6-6" />
+            </svg>
+          )}
         </div>
       </div>
     </div>
