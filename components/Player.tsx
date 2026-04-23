@@ -67,6 +67,9 @@ export default function Player() {
   // Latches intent to auto-play across chunk/chapter transitions, even if the
   // browser fires `pause` while the next source is still loading.
   const wantPlayRef = useRef(false);
+  // Guards one-time auto-resume of the last chapter on first mount so we
+  // don't re-trigger a load if the callback identity changes later.
+  const didAutoResumeRef = useRef(false);
 
   useEffect(() => {
     const savedUrl = localStorage.getItem(LS_URL);
@@ -293,6 +296,17 @@ export default function Player() {
     [buildChunks, current, fetchChapter, nextPrefetch, preloadChunk, pushHistory],
   );
 
+  // Auto-resume the last chapter on first mount. `loadChapterFromUrl` itself
+  // will pick up the saved chunk index + offset from the per-chapter position
+  // key. Runs exactly once thanks to the ref latch.
+  useEffect(() => {
+    if (didAutoResumeRef.current) return;
+    const savedUrl = localStorage.getItem(LS_URL);
+    if (!savedUrl) return;
+    didAutoResumeRef.current = true;
+    void loadChapterFromUrl(savedUrl, false);
+  }, [loadChapterFromUrl]);
+
   useEffect(() => {
     if (!current?.chapter.nextUrl) return;
     if (nextPrefetch && nextPrefetch.chapter.url === current.chapter.nextUrl) return;
@@ -366,6 +380,9 @@ export default function Player() {
       setNextPrefetch(null);
       setCurrentChunkIndex(0);
       localStorage.setItem(LS_URL, nextPrefetch.chapter.url);
+      // Keep the "most recent" sort order fresh so reopening the app jumps
+      // straight to whatever was playing last, even on background auto-advance.
+      pushHistory(nextPrefetch.chapter);
       wantPlayRef.current = true;
       setIsPlaying(true);
       return;
@@ -375,7 +392,7 @@ export default function Player() {
       return void loadChapterFromUrl(current.chapter.nextUrl, true);
     }
     setIsPlaying(false);
-  }, [current, currentChunkIndex, nextPrefetch, loadChapterFromUrl, sleep]);
+  }, [current, currentChunkIndex, nextPrefetch, loadChapterFromUrl, sleep, pushHistory]);
 
   const togglePlay = useCallback(async () => {
     const a = audioRef.current;
@@ -440,18 +457,38 @@ export default function Player() {
     });
   }, [current]);
 
+  // Persist playback position: a 3s interval covers the common case, and
+  // `visibilitychange` / `pagehide` / `beforeunload` guarantee a final flush
+  // when the user switches tabs, locks their phone, or closes the app — the
+  // interval is throttled or paused in background, so those events are what
+  // actually keep resume-on-reopen accurate.
   useEffect(() => {
     if (!current) return;
     const key = LS_POSITION_PREFIX + current.chapter.url;
-    const t = setInterval(() => {
+    const save = () => {
       const a = audioRef.current;
       if (!a) return;
-      localStorage.setItem(
-        key,
-        JSON.stringify({ chunk: currentChunkIndex, offset: a.currentTime }),
-      );
-    }, 3000);
-    return () => clearInterval(t);
+      try {
+        localStorage.setItem(
+          key,
+          JSON.stringify({ chunk: currentChunkIndex, offset: a.currentTime }),
+        );
+      } catch {}
+    };
+    const t = setInterval(save, 3000);
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") save();
+    };
+    const onHide = () => save();
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", onHide);
+    window.addEventListener("beforeunload", onHide);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", onHide);
+      window.removeEventListener("beforeunload", onHide);
+    };
   }, [current, currentChunkIndex]);
 
   useEffect(() => {
