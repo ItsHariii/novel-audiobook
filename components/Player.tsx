@@ -38,6 +38,9 @@ const LS_POSITION_PREFIX = "nab:pos:";
 const LS_HISTORY = "nab:history";
 const LS_READER_FONT = "nab:readerFont";
 const LS_PLAYER_VISIBLE = "nab:playerVisible";
+const LS_THEME = "nab:theme";
+
+type Theme = "dark" | "light";
 
 export default function Player() {
   const [inputUrl, setInputUrl] = useState("");
@@ -60,6 +63,10 @@ export default function Player() {
   const [headerHidden, setHeaderHidden] = useState(false);
   const [sleep, setSleep] = useState<SleepMode>(null);
   const [sleepRemainingMs, setSleepRemainingMs] = useState(0);
+  // Theme state. The initial value comes from the pre-hydration script in
+  // `app/layout.tsx`, which already set `data-theme` on <html>; we read it
+  // back here so React state stays in sync without causing a flash.
+  const [theme, setTheme] = useState<Theme>("dark");
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -96,6 +103,19 @@ export default function Player() {
       if (!Number.isNaN(n)) setReaderFontSize(n);
     }
     if (savedPlayerVisible === "0") setPlayerBarVisible(false);
+    const attr = document.documentElement.getAttribute("data-theme");
+    if (attr === "light" || attr === "dark") setTheme(attr);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    try {
+      localStorage.setItem(LS_THEME, theme);
+    } catch {}
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((t) => (t === "dark" ? "light" : "dark"));
   }, []);
 
   useEffect(() => localStorage.setItem(LS_VOICE, voice), [voice]);
@@ -612,6 +632,8 @@ export default function Player() {
         onTogglePlayerBar={() => setPlayerBarVisible((v) => !v)}
         hasChapter={!!current}
         hidden={headerHidden}
+        theme={theme}
+        onToggleTheme={toggleTheme}
       />
 
       {error && <Toast message={error} onClose={() => setError(null)} />}

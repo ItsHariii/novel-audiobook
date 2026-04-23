@@ -62,7 +62,7 @@ export function SettingsDrawer(props: {
         <div className="tabular mb-4 text-sm">{readerFontSize}px</div>
 
         <p className="mt-3 text-xs text-[var(--color-muted)]">
-          Theme uses a fixed monochrome palette for a minimal reading experience.
+          Toggle between dark mode and the warm parchment light mode from the icon in the top bar.
         </p>
       </aside>
     </div>

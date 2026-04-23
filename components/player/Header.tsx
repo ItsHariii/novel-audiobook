@@ -6,6 +6,8 @@ export function Header(props: {
   onTogglePlayerBar: () => void;
   hasChapter: boolean;
   hidden?: boolean;
+  theme: "dark" | "light";
+  onToggleTheme: () => void;
 }) {
   return (
     <header
@@ -37,6 +39,12 @@ export function Header(props: {
               <LibraryIcon />
             </IconButton>
           )}
+          <IconButton
+            label={props.theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            onClick={props.onToggleTheme}
+          >
+            {props.theme === "dark" ? <SunIcon /> : <MoonIcon />}
+          </IconButton>
           <IconButton label="Settings" onClick={props.onOpenSettings}>
             <SettingsIcon />
           </IconButton>
@@ -104,6 +112,43 @@ function LibraryIcon() {
     >
       <path d="M4 4h4v16H4zM10 4h4v16h-4z" />
       <path d="M17 5l3.2 .8-3.5 14.4-3.2-.8z" />
+    </svg>
+  );
+}
+
+function SunIcon() {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M21 12.3A9 9 0 1 1 11.7 3a7 7 0 0 0 9.3 9.3z" />
     </svg>
   );
 }

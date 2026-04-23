@@ -12,6 +12,26 @@
   --color-accent-soft: rgba(167, 139, 250, 0.16);
 }
 
+:root {
+  color-scheme: dark;
+}
+
+/* Warm off-white "parchment" theme — picked to feel like book pages rather
+   than a stark white background. Purple accent is darkened so it keeps
+   contrast on the cream surface. */
+:root[data-theme="light"] {
+  --color-bg: #faf5e6;
+  --color-panel: #f3ecd5;
+  --color-panel-2: #ece3c7;
+  --color-border: #ddd1ac;
+  --color-text: #24201a;
+  --color-muted: #6b6456;
+  --color-accent: #6d4fef;
+  --color-accent-hover: #5a3ce0;
+  --color-accent-soft: rgba(109, 79, 239, 0.14);
+  color-scheme: light;
+}
+
 html,
 body {
   background: var(--color-bg);
@@ -96,4 +116,23 @@ input[type="range"]::-moz-range-thumb {
   border-radius: 9999px;
   background: var(--color-accent);
   border: none;
+}
+
+/* Light theme: flip the white-alpha hover tints to a dark-alpha so buttons
+   still show a subtle "pressed" feedback on cream surfaces. Targets the
+   exact utility classes used across the player components. */
+:root[data-theme="light"] .hover\:bg-white\/5:hover {
+  background-color: rgba(36, 32, 26, 0.07);
+}
+:root[data-theme="light"] .hover\:bg-white\/\[0\.03\]:hover {
+  background-color: rgba(36, 32, 26, 0.05);
+}
+:root[data-theme="light"] .hover\:bg-white\/\[0\.04\]:hover {
+  background-color: rgba(36, 32, 26, 0.06);
+}
+:root[data-theme="light"] .hover\:border-white\/20:hover {
+  border-color: rgba(36, 32, 26, 0.28);
+}
+:root[data-theme="light"] .bg-white\/10 {
+  background-color: rgba(36, 32, 26, 0.1);
 }

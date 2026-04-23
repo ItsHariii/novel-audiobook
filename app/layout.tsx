@@ -23,8 +23,23 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
-  themeColor: "#000000",
+  themeColor: [
+    { media: "(prefers-color-scheme: dark)", color: "#050505" },
+    { media: "(prefers-color-scheme: light)", color: "#faf5e6" },
+  ],
 };
+
+// Inline script: runs before hydration to apply the user's saved theme (or
+// their system preference) so there's no flash of the wrong palette on load.
+const themeInitScript = `
+try {
+  var t = localStorage.getItem('nab:theme');
+  if (t !== 'light' && t !== 'dark') {
+    t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  }
+  document.documentElement.setAttribute('data-theme', t);
+} catch (e) {}
+`;
 
 export default function RootLayout({
   children,
@@ -33,6 +48,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${inter.variable} ${lora.variable}`}>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+      </head>
       <body>{children}</body>
     </html>
   );
