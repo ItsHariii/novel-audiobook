@@ -22,7 +22,11 @@ export function Header(props: {
       <div className="flex items-center justify-between gap-4 px-4 py-2.5 sm:px-6 lg:px-8">
         <div className="flex items-center gap-2.5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.png" alt="Tome" className="h-10 w-10" />
+          <img
+            src={props.theme === "light" ? "/logo-light.png" : "/logo.png"}
+            alt="Tome"
+            className="h-10 w-10"
+          />
         </div>
         <div className="flex items-center gap-1">
           {props.hasChapter && (
