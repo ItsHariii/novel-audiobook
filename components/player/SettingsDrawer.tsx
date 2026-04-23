@@ -4,8 +4,6 @@ export function SettingsDrawer(props: {
   voice: string;
   onVoice: (v: string) => void;
   voices: Array<{ id: string; label: string }>;
-  playbackRate: number;
-  onPlaybackRate: (v: number) => void;
   readerFontSize: number;
   onReaderFontSize: (v: number) => void;
 }) {
@@ -15,8 +13,6 @@ export function SettingsDrawer(props: {
     voice,
     onVoice,
     voices,
-    playbackRate,
-    onPlaybackRate,
     readerFontSize,
     onReaderFontSize,
   } = props;
@@ -52,18 +48,6 @@ export function SettingsDrawer(props: {
             </option>
           ))}
         </select>
-
-        <label className="mb-1 block text-xs text-[var(--color-muted)]">Playback speed</label>
-        <input
-          type="range"
-          min={0.75}
-          max={2.5}
-          step={0.05}
-          value={playbackRate}
-          onChange={(e) => onPlaybackRate(parseFloat(e.target.value))}
-          className="mb-2 w-full"
-        />
-        <div className="tabular mb-4 text-sm">{playbackRate.toFixed(2)}x</div>
 
         <label className="mb-1 block text-xs text-[var(--color-muted)]">Reader font size</label>
         <input

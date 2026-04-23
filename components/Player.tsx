@@ -110,12 +110,16 @@ export default function Player() {
     [playerBarVisible],
   );
 
+  // Apply playbackRate whenever it changes OR whenever the chunk index moves
+  // (new audio source). Some browsers reset rate back to 1.0 on src change,
+  // so we re-apply on each transition. onLoadedMetadata also re-applies it
+  // once the new audio element finishes loading.
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
     a.playbackRate = playbackRate;
     (a as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = true;
-  }, [playbackRate, current]);
+  }, [playbackRate, current, currentChunkIndex]);
 
   // Sleep timer: ticks the time-based mode, fades volume in the final 10s,
   // and pauses when time runs out. For "chunk"/"chapter" modes we just
@@ -470,6 +474,10 @@ export default function Player() {
   const onLoadedMetadata = useCallback(() => {
     const a = audioRef.current;
     if (!a || !current) return;
+    // Re-assert playback rate: some browsers drop it back to 1.0 when the
+    // audio source changes between chunks/chapters.
+    a.playbackRate = playbackRate;
+    (a as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = true;
     setChunkDuration(a.duration || 0);
     const key = LS_POSITION_PREFIX + current.chapter.url;
     try {
@@ -482,7 +490,7 @@ export default function Player() {
         localStorage.removeItem(key);
       }
     } catch {}
-  }, [current, currentChunkIndex]);
+  }, [current, currentChunkIndex, playbackRate]);
 
   const onTimeUpdate = useCallback(() => {
     const a = audioRef.current;
@@ -490,12 +498,21 @@ export default function Player() {
     setChunkPosition(a.currentTime);
   }, []);
 
-  // Tap/click anywhere brings the header back. Attached at the window level so
-  // controls, chunk jumps, etc. all reveal it — matches the user request of
-  // "come back if I just tap on screen".
+  // Double-tap/click anywhere brings the header back. Requires two quick taps
+  // so a single accidental tap while reading doesn't pop the menu open.
   useEffect(() => {
     if (!headerHidden) return;
-    const onPointer = () => setHeaderHidden(false);
+    const DOUBLE_TAP_MS = 350;
+    let lastTapAt = 0;
+    const onPointer = () => {
+      const now = Date.now();
+      if (now - lastTapAt <= DOUBLE_TAP_MS) {
+        lastTapAt = 0;
+        setHeaderHidden(false);
+        return;
+      }
+      lastTapAt = now;
+    };
     window.addEventListener("pointerdown", onPointer);
     return () => window.removeEventListener("pointerdown", onPointer);
   }, [headerHidden]);
@@ -702,6 +719,8 @@ export default function Player() {
           sleepRemainingMs={sleepRemainingMs}
           onSleepSet={setSleep}
           onSleepCancel={cancelSleep}
+          playbackRate={playbackRate}
+          onPlaybackRate={setPlaybackRate}
         />
       )}
 
@@ -729,8 +748,6 @@ export default function Player() {
         voice={voice}
         onVoice={setVoice}
         voices={VOICES}
-        playbackRate={playbackRate}
-        onPlaybackRate={setPlaybackRate}
         readerFontSize={readerFontSize}
         onReaderFontSize={setReaderFontSize}
       />

@@ -1,5 +1,6 @@
 import type { ChunkStatus } from "@/components/player/types";
 import { ChunkDots } from "@/components/player/ChunkDots";
+import { PlaybackSpeedButton } from "@/components/player/PlaybackSpeedButton";
 import { SleepTimerButton, type SleepMode } from "@/components/player/SleepTimerButton";
 
 function fmt(secs: number): string {
@@ -28,6 +29,8 @@ export function PlayerBar(props: {
   sleepRemainingMs: number;
   onSleepSet: (mode: Exclude<SleepMode, null>) => void;
   onSleepCancel: () => void;
+  playbackRate: number;
+  onPlaybackRate: (rate: number) => void;
 }) {
   const isLoading = props.currentChunkStatus === "loading";
   const hasError = props.currentChunkStatus === "error";
@@ -99,6 +102,11 @@ export function PlayerBar(props: {
               className="hidden h-1.5 w-1.5 rounded-full bg-[var(--color-accent)] shadow-[0_0_6px_rgba(167,139,250,0.7)] md:block"
             />
           )}
+          <PlaybackSpeedButton
+            rate={props.playbackRate}
+            onChange={props.onPlaybackRate}
+            disabled={!props.hasChapter}
+          />
           <SleepTimerButton
             sleep={props.sleep}
             remainingMs={props.sleepRemainingMs}

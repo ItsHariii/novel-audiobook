@@ -48,11 +48,22 @@ export function ReaderPanel(props: {
     [],
   );
 
+  // Track whether `chunks` just changed (new chapter loaded). When it has, we
+  // jump to the very top of the scroller so the reader starts at the chapter
+  // header instead of centering on the first paragraph.
+  const prevChunksRef = useRef(chunks);
   useEffect(() => {
+    const chunksChanged = prevChunksRef.current !== chunks;
+    prevChunksRef.current = chunks;
+    const container = scrollRef.current;
+    if (chunksChanged) {
+      container?.scrollTo({ top: 0, behavior: "auto" });
+      return;
+    }
     const node = refs.current[currentChunkIndex];
     if (!node) return;
     node.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
-  }, [currentChunkIndex, reducedMotion]);
+  }, [currentChunkIndex, chunks, reducedMotion]);
 
   // Fire `onUserScroll` only on user-initiated scroll gestures (wheel or
   // touchmove). Skips programmatic scrollIntoView above.
