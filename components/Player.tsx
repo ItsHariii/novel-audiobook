@@ -356,6 +356,19 @@ export default function Player() {
   const currentChunk = current?.chunks[currentChunkIndex];
   const audioSrc = currentChunk?.blobUrl ?? "";
 
+  // Manage audio src imperatively so onEnded can advance audio synchronously
+  // (within the ended event stack) without React's reconciliation later
+  // clobbering the src we already set and triggering a reload.
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    if (!audioSrc) {
+      if (a.hasAttribute("src")) a.removeAttribute("src");
+      return;
+    }
+    if (a.src !== audioSrc) a.src = audioSrc;
+  }, [audioSrc]);
+
   useEffect(() => {
     const a = audioRef.current;
     if (!a || !audioSrc) return;
@@ -368,7 +381,8 @@ export default function Player() {
   }, [audioSrc, isPlaying]);
 
   const onEnded = useCallback(() => {
-    if (!current) return;
+    const a = audioRef.current;
+    if (!current || !a) return;
     const nextIdx = currentChunkIndex + 1;
 
     // Sleep timer: stop at the end of the current part.
@@ -380,7 +394,16 @@ export default function Player() {
     }
 
     if (nextIdx < current.chunks.length) {
-      wantPlayRef.current = true;
+      const nextBlobUrl = current.chunks[nextIdx]?.blobUrl;
+      if (nextBlobUrl) {
+        // Advance audio synchronously within the ended event so backgrounded tabs
+        // and locked screens can't block play() via throttled React renders.
+        a.src = nextBlobUrl;
+        a.play().catch(() => { wantPlayRef.current = true; });
+      } else {
+        // Blob not ready yet — preload effect will resume once it lands.
+        wantPlayRef.current = true;
+      }
       setCurrentChunkIndex(nextIdx);
       return;
     }
@@ -394,8 +417,14 @@ export default function Player() {
     }
 
     if (nextPrefetch) {
-      if (current)
-        for (const c of current.chunks) if (c.blobUrl) URL.revokeObjectURL(c.blobUrl);
+      for (const c of current.chunks) if (c.blobUrl) URL.revokeObjectURL(c.blobUrl);
+      const firstBlobUrl = nextPrefetch.chunks[0]?.blobUrl;
+      if (firstBlobUrl) {
+        a.src = firstBlobUrl;
+        a.play().catch(() => { wantPlayRef.current = true; });
+      } else {
+        wantPlayRef.current = true;
+      }
       setCurrent(nextPrefetch);
       setNextPrefetch(null);
       setCurrentChunkIndex(0);
@@ -403,7 +432,6 @@ export default function Player() {
       // Keep the "most recent" sort order fresh so reopening the app jumps
       // straight to whatever was playing last, even on background auto-advance.
       pushHistory(nextPrefetch.chapter);
-      wantPlayRef.current = true;
       setIsPlaying(true);
       return;
     }
@@ -475,7 +503,28 @@ export default function Player() {
       artist: current.chapter.source,
       album: "Tome",
     });
-  }, [current]);
+    navigator.mediaSession.setActionHandler("play", () => void togglePlay());
+    navigator.mediaSession.setActionHandler("pause", () => void togglePlay());
+    navigator.mediaSession.setActionHandler("nexttrack", goNextChapter);
+    navigator.mediaSession.setActionHandler("previoustrack", goPrevChapter);
+    navigator.mediaSession.setActionHandler("seekbackward", (d) => seekSeconds(-(d.seekOffset ?? 15)));
+    navigator.mediaSession.setActionHandler("seekforward", (d) => seekSeconds(d.seekOffset ?? 15));
+    navigator.mediaSession.setActionHandler("seekto", (d) => { if (d.seekTime != null) seekTo(d.seekTime); });
+    return () => {
+      navigator.mediaSession.setActionHandler("play", null);
+      navigator.mediaSession.setActionHandler("pause", null);
+      navigator.mediaSession.setActionHandler("nexttrack", null);
+      navigator.mediaSession.setActionHandler("previoustrack", null);
+      navigator.mediaSession.setActionHandler("seekbackward", null);
+      navigator.mediaSession.setActionHandler("seekforward", null);
+      navigator.mediaSession.setActionHandler("seekto", null);
+    };
+  }, [current, togglePlay, goPrevChapter, goNextChapter, seekSeconds, seekTo]);
+
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
+  }, [isPlaying]);
 
   // Persist playback position: a 3s interval covers the common case, and
   // `visibilitychange` / `pagehide` / `beforeunload` guarantee a final flush
@@ -736,7 +785,6 @@ export default function Player() {
 
       <audio
         ref={audioRef}
-        src={audioSrc || undefined}
         onEnded={onEnded}
         onLoadedMetadata={onLoadedMetadata}
         onTimeUpdate={onTimeUpdate}

@@ -60,10 +60,12 @@ export function ReaderPanel(props: {
       container?.scrollTo({ top: 0, behavior: "auto" });
       return;
     }
+    // In reading mode the user owns scroll position; only scroll on explicit click.
+    if (readingMode) return;
     const node = refs.current[currentChunkIndex];
     if (!node) return;
     node.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
-  }, [currentChunkIndex, chunks, reducedMotion]);
+  }, [currentChunkIndex, chunks, reducedMotion, readingMode]);
 
   // Fire `onUserScroll` only on user-initiated scroll gestures (wheel or
   // touchmove). Skips programmatic scrollIntoView above.
@@ -187,7 +189,11 @@ export function ReaderPanel(props: {
                   refs.current[c.index] = el;
                 }}
                 key={c.index}
-                onClick={() => onPickChunk(c.index)}
+                onClick={() => {
+                  onPickChunk(c.index);
+                  if (readingMode)
+                    refs.current[c.index]?.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
+                }}
                 className={`group relative block w-full rounded-lg px-3 py-2 text-left transition ${
                   !readingMode && isCurrent
                     ? "bg-[var(--color-accent-soft)]"
