@@ -1,3 +1,7 @@
+"use client";
+
+import { useEffect } from "react";
+
 export function SettingsDrawer(props: {
   open: boolean;
   onClose: () => void;
@@ -16,6 +20,13 @@ export function SettingsDrawer(props: {
     readerFontSize,
     onReaderFontSize,
   } = props;
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
 
   return (
     <div

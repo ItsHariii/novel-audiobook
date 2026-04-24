@@ -35,6 +35,7 @@ export async function GET(req: NextRequest) {
   try {
     const res = await undiciFetch(target.toString(), {
       dispatcher: h2Dispatcher,
+      signal: AbortSignal.timeout(8000),
       headers: {
         "user-agent": USER_AGENT,
         accept:

@@ -23,6 +23,7 @@ export function PlayerBar(props: {
   currentChunkIndex: number;
   totalChunks: number;
   currentChunkStatus: ChunkStatus;
+  chunkStatuses: ChunkStatus[];
   prefetchReady: boolean;
   onPickChunk: (i: number) => void;
   sleep: SleepMode;
@@ -92,6 +93,7 @@ export function PlayerBar(props: {
                 total={props.totalChunks}
                 currentIndex={props.currentChunkIndex}
                 onPick={props.onPickChunk}
+                statusOf={(i) => props.chunkStatuses[i] ?? "pending"}
               />
             </div>
           )}

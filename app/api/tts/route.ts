@@ -6,12 +6,20 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const DEFAULT_VOICE = "en-US-AvaNeural";
+const MAX_TEXT_LENGTH = 3000;
+
+const ALLOWED_VOICES = new Set([
+  "en-US-AvaNeural", "en-US-AndrewNeural", "en-US-EmmaNeural", "en-US-BrianNeural",
+  "en-GB-SoniaNeural", "en-GB-RyanNeural", "en-US-GuyNeural", "en-US-JennyNeural",
+]);
 
 function parseBody(body: unknown): { text: string; voice: string } | null {
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
   if (typeof b.text !== "string" || b.text.trim().length === 0) return null;
-  const voice = typeof b.voice === "string" && b.voice.length > 0 ? b.voice : DEFAULT_VOICE;
+  if (b.text.length > MAX_TEXT_LENGTH) return null;
+  const voice =
+    typeof b.voice === "string" && ALLOWED_VOICES.has(b.voice) ? b.voice : DEFAULT_VOICE;
   return { text: b.text, voice };
 }
 

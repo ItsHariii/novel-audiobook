@@ -1,3 +1,5 @@
+"use client";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { Chunk } from "@/components/player/types";
@@ -29,6 +31,7 @@ export function ReaderPanel(props: {
 
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const scrollRafRef = useRef<number | null>(null);
   const onReachedEndRef = useRef(onReachedEnd);
   useEffect(() => {
     onReachedEndRef.current = onReachedEnd;
@@ -57,14 +60,30 @@ export function ReaderPanel(props: {
     prevChunksRef.current = chunks;
     const container = scrollRef.current;
     if (chunksChanged) {
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
       container?.scrollTo({ top: 0, behavior: "auto" });
       return;
     }
     // In reading mode the user owns scroll position; only scroll on explicit click.
     if (readingMode) return;
-    const node = refs.current[currentChunkIndex];
-    if (!node) return;
-    node.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
+    // Debounce via rAF so rapid chunk advances (ChunkDots clicking, high speed)
+    // don't stack overlapping smooth scrolls.
+    if (scrollRafRef.current !== null) cancelAnimationFrame(scrollRafRef.current);
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      const node = refs.current[currentChunkIndex];
+      if (!node) return;
+      node.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
+    });
+    return () => {
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
+    };
   }, [currentChunkIndex, chunks, reducedMotion, readingMode]);
 
   // Fire `onUserScroll` only on user-initiated scroll gestures (wheel or

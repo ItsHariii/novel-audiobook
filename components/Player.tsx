@@ -118,20 +118,17 @@ export default function Player() {
     setTheme((t) => (t === "dark" ? "light" : "dark"));
   }, []);
 
-  useEffect(() => localStorage.setItem(LS_VOICE, voice), [voice]);
-  useEffect(() => localStorage.setItem(LS_SPEED, String(playbackRate)), [playbackRate]);
-  useEffect(
-    () => localStorage.setItem(LS_HISTORY, JSON.stringify(history.slice(0, 20))),
-    [history],
-  );
-  useEffect(
-    () => localStorage.setItem(LS_READER_FONT, String(readerFontSize)),
-    [readerFontSize],
-  );
-  useEffect(
-    () => localStorage.setItem(LS_PLAYER_VISIBLE, playerBarVisible ? "1" : "0"),
-    [playerBarVisible],
-  );
+  useEffect(() => { try { localStorage.setItem(LS_VOICE, voice); } catch {} }, [voice]);
+  useEffect(() => { try { localStorage.setItem(LS_SPEED, String(playbackRate)); } catch {} }, [playbackRate]);
+  useEffect(() => {
+    try { localStorage.setItem(LS_HISTORY, JSON.stringify(history.slice(0, 20))); } catch {}
+  }, [history]);
+  useEffect(() => {
+    try { localStorage.setItem(LS_READER_FONT, String(readerFontSize)); } catch {}
+  }, [readerFontSize]);
+  useEffect(() => {
+    try { localStorage.setItem(LS_PLAYER_VISIBLE, playerBarVisible ? "1" : "0"); } catch {}
+  }, [playerBarVisible]);
 
   // Apply playbackRate whenever it changes OR whenever the chunk index moves
   // (new audio source). Some browsers reset rate back to 1.0 on src change,
@@ -232,30 +229,43 @@ export default function Player() {
   const preloadChunk = useCallback(
     async (
       loaded: LoadedChapter,
-      setLoaded: (v: LoadedChapter) => void,
+      // Functional-update setter so concurrent preloads never clobber each
+      // other's results. The chapter-URL guard discards completions that
+      // arrive after a chapter change (C1 + C2).
+      setLoaded: (updater: (prev: LoadedChapter | null) => LoadedChapter | null) => void,
       chunkIndex: number,
       signal?: AbortSignal,
     ) => {
       const chunk = loaded.chunks[chunkIndex];
       if (!chunk || chunk.status === "ready" || chunk.status === "loading") return;
-      loaded.chunks[chunkIndex] = { ...chunk, status: "loading" };
-      setLoaded({ ...loaded, chunks: [...loaded.chunks] });
+      const { url } = loaded.chapter;
+      const text = chunk.text;
+      setLoaded((prev) => {
+        if (!prev || prev.chapter.url !== url) return prev;
+        const chunks = [...prev.chunks];
+        chunks[chunkIndex] = { ...chunks[chunkIndex], status: "loading" };
+        return { ...prev, chunks };
+      });
       try {
-        const blobUrl = await fetchChunkAudio(chunk.text, signal);
-        loaded.chunks[chunkIndex] = {
-          ...loaded.chunks[chunkIndex],
-          blobUrl,
-          status: "ready",
-        };
-        setLoaded({ ...loaded, chunks: [...loaded.chunks] });
+        const blobUrl = await fetchChunkAudio(text, signal);
+        setLoaded((prev) => {
+          if (!prev || prev.chapter.url !== url) return prev;
+          const chunks = [...prev.chunks];
+          chunks[chunkIndex] = { ...chunks[chunkIndex], blobUrl, status: "ready" };
+          return { ...prev, chunks };
+        });
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
-        loaded.chunks[chunkIndex] = {
-          ...loaded.chunks[chunkIndex],
-          status: "error",
-          error: (err as Error).message,
-        };
-        setLoaded({ ...loaded, chunks: [...loaded.chunks] });
+        setLoaded((prev) => {
+          if (!prev || prev.chapter.url !== url) return prev;
+          const chunks = [...prev.chunks];
+          chunks[chunkIndex] = {
+            ...chunks[chunkIndex],
+            status: "error",
+            error: (err as Error).message,
+          };
+          return { ...prev, chunks };
+        });
       }
     },
     [fetchChunkAudio],
@@ -345,11 +355,13 @@ export default function Player() {
 
   useEffect(() => {
     if (!current) return;
-    if (current.chunks[currentChunkIndex + 1]?.status === "pending") {
-      preloadChunk(current, setCurrent, currentChunkIndex + 1).catch(() => {});
-    }
-    if (current.chunks[currentChunkIndex + 2]?.status === "pending") {
-      preloadChunk(current, setCurrent, currentChunkIndex + 2).catch(() => {});
+    // Thread the active AbortController's signal so chapter-change aborts also
+    // cancel in-flight chunk preloads (pairs with the URL-guard in preloadChunk).
+    const signal = abortRef.current?.signal;
+    for (const offset of [1, 2, 3]) {
+      if (current.chunks[currentChunkIndex + offset]?.status === "pending") {
+        preloadChunk(current, setCurrent, currentChunkIndex + offset, signal).catch(() => {});
+      }
     }
   }, [currentChunkIndex, current, preloadChunk]);
 
@@ -467,7 +479,7 @@ export default function Player() {
     const a = audioRef.current;
     if (!a || !current) return;
     if (a.paused) {
-      if (!audioSrc && currentChunk?.status === "pending")
+      if (!audioSrc && (currentChunk?.status === "pending" || currentChunk?.status === "error"))
         preloadChunk(current, setCurrent, currentChunkIndex).catch(() => {});
       try {
         await a.play();
@@ -836,6 +848,7 @@ export default function Player() {
           currentChunkIndex={currentChunkIndex}
           totalChunks={current?.chunks.length ?? 0}
           currentChunkStatus={currentChunk?.status ?? "pending"}
+          chunkStatuses={current?.chunks.map((c) => c.status) ?? []}
           prefetchReady={
             !!nextPrefetch?.chunks[0] && nextPrefetch.chunks[0].status === "ready"
           }

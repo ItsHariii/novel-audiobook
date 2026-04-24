@@ -7,8 +7,7 @@ const PRESETS: number[] = [
 ];
 
 function fmt(rate: number): string {
-  const rounded = Math.round(rate * 100) / 100;
-  return Number.isInteger(rounded) ? `${rounded}x` : `${rounded}x`;
+  return `${Math.round(rate * 100) / 100}x`;
 }
 
 export function PlaybackSpeedButton(props: {
