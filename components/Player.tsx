@@ -359,15 +359,26 @@ export default function Player() {
   // Manage audio src imperatively so onEnded can advance audio synchronously
   // (within the ended event stack) without React's reconciliation later
   // clobbering the src we already set and triggering a reload.
+  //
+  // CRITICAL for background playback: when the next chunk's TTS blob hasn't
+  // arrived yet, `audioSrc` is empty. We MUST NOT clear the element's src in
+  // that window — iOS/Android revoke our background audio focus the moment
+  // the element goes idle with no src, which breaks any subsequent play()
+  // call. Keep the previous (ended) blob attached until a real new blob is
+  // ready to swap in.
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
     if (!audioSrc) {
-      if (a.hasAttribute("src")) a.removeAttribute("src");
+      // Only drop src when there's no pending resume intent AND we aren't
+      // actively playing — e.g. user stopped, chapter unloaded, nothing queued.
+      if (!wantPlayRef.current && !isPlaying && a.hasAttribute("src")) {
+        a.removeAttribute("src");
+      }
       return;
     }
     if (a.src !== audioSrc) a.src = audioSrc;
-  }, [audioSrc]);
+  }, [audioSrc, isPlaying]);
 
   useEffect(() => {
     const a = audioRef.current;
@@ -401,8 +412,13 @@ export default function Player() {
         a.src = nextBlobUrl;
         a.play().catch(() => { wantPlayRef.current = true; });
       } else {
-        // Blob not ready yet — preload effect will resume once it lands.
+        // Blob not ready yet. Kick off the fetch imperatively (React effects
+        // are throttled when backgrounded) and keep the previous src mounted
+        // so iOS/Android don't revoke our audio focus while we wait.
         wantPlayRef.current = true;
+        if (current.chunks[nextIdx]?.status === "pending") {
+          preloadChunk(current, setCurrent, nextIdx).catch(() => {});
+        }
       }
       setCurrentChunkIndex(nextIdx);
       return;
@@ -423,7 +439,12 @@ export default function Player() {
         a.src = firstBlobUrl;
         a.play().catch(() => { wantPlayRef.current = true; });
       } else {
+        // Same background-safe path as chunk-level: kick off preload imperatively,
+        // keep old src attached so audio focus isn't revoked while we wait.
         wantPlayRef.current = true;
+        if (nextPrefetch.chunks[0]?.status === "pending") {
+          preloadChunk(nextPrefetch, setCurrent, 0).catch(() => {});
+        }
       }
       setCurrent(nextPrefetch);
       setNextPrefetch(null);
@@ -440,7 +461,7 @@ export default function Player() {
       return void loadChapterFromUrl(current.chapter.nextUrl, true);
     }
     setIsPlaying(false);
-  }, [current, currentChunkIndex, nextPrefetch, loadChapterFromUrl, sleep, pushHistory]);
+  }, [current, currentChunkIndex, nextPrefetch, loadChapterFromUrl, sleep, pushHistory, preloadChunk]);
 
   const togglePlay = useCallback(async () => {
     const a = audioRef.current;
