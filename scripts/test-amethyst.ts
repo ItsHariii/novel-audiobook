@@ -16,6 +16,9 @@ async function main() {
   const html = await res.text();
   const chapter = parseGeneric(html, url);
   console.log("title:", chapter.title);
+  console.log("bookTitle:", chapter.bookTitle);
+  console.log("chapterLabel:", chapter.chapterLabel);
+  console.log("source:", chapter.source);
   console.log("paragraphs:", chapter.paragraphs.length);
   console.log("nextUrl:", chapter.nextUrl);
   console.log("prevUrl:", chapter.prevUrl);

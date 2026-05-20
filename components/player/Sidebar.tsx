@@ -90,7 +90,9 @@ export function Sidebar(props: {
               {isOpen && (
                 <div className="mb-1 ml-5 border-l border-[var(--color-border)] pl-2">
                   {group.chapters.map((item) => {
-                    const { badge, label } = splitChapterTitle(item.title);
+                    const { badge, label } = splitChapterTitle(
+                      item.chapterLabel || item.title,
+                    );
                     return (
                       <button
                         key={item.url}
@@ -164,11 +166,12 @@ function deriveBookKey(item: HistoryItem): string {
     // Drop the final segment (the chapter id) to get the book's parent path.
     return u.origin + "/" + parts.slice(0, -1).join("/");
   } catch {
-    return item.source + "::" + item.title;
+    return item.source + "::" + (item.bookTitle || item.title);
   }
 }
 
 function deriveBookTitle(item: HistoryItem): string {
+  if (item.bookTitle) return item.bookTitle;
   try {
     const u = new URL(item.url);
     const parts = u.pathname.split("/").filter(Boolean);
@@ -218,6 +221,10 @@ function chapterNumberFromUrl(url: string): number | null {
 }
 
 function chapterOrder(item: HistoryItem): number {
+  if (item.chapterLabel) {
+    const fromLabel = chapterNumberFromTitle(item.chapterLabel);
+    if (fromLabel !== null) return fromLabel;
+  }
   const fromTitle = chapterNumberFromTitle(item.title);
   if (fromTitle !== null) return fromTitle;
   const fromUrl = chapterNumberFromUrl(item.url);

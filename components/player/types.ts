@@ -21,4 +21,6 @@ export interface HistoryItem {
   source: string;
   coverSeed: string;
   lastAt: number;
+  bookTitle?: string;
+  chapterLabel?: string;
 }

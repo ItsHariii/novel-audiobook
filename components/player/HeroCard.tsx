@@ -1,6 +1,7 @@
 export function HeroCard(props: {
   title: string;
   source: string;
+  chapterLabel?: string;
   currentPart: number;
   totalParts: number;
   canPrevChapter: boolean;
@@ -11,6 +12,7 @@ export function HeroCard(props: {
   const {
     title,
     source,
+    chapterLabel,
     currentPart,
     totalParts,
     canPrevChapter,
@@ -27,6 +29,11 @@ export function HeroCard(props: {
       <h1 className="mt-2 text-balance font-serif text-3xl font-medium leading-[1.15] tracking-tight sm:text-4xl">
         {title}
       </h1>
+      {chapterLabel && chapterLabel !== title && (
+        <p className="mt-2 text-balance font-serif text-base leading-snug text-[var(--color-text)]/80 sm:text-lg">
+          {chapterLabel}
+        </p>
+      )}
       <div className="mt-4 flex items-center gap-3">
         <p className="tabular text-xs text-[var(--color-muted)]">
           Part {currentPart} / {totalParts}

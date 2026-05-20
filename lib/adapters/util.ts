@@ -4,6 +4,97 @@ import type { AnyNode } from "domhandler";
 const JUNK_TEXT_RE =
   /^(reading settings|size|spacing|reset to default|tap the text|compact|normal|relaxed|dm sans|lora|jetbrains|comfortaa|previous|next|prev|home|chapter \d+\s*\/\s*\d+)$/i;
 
+const CHAPTER_LABEL_RE = /^\s*(?:chapter|ch\.?|ep|episode)\s*\d+/i;
+const TITLE_SEPARATOR_RE = /\s+[-–|—·]\s+/;
+
+export function extractTitles(
+  $: CheerioAPI,
+  currentUrl: string,
+): { title: string; bookTitle?: string; chapterLabel?: string } {
+  const h1 = collapseWs($("h1").first().text());
+  const docTitle = collapseWs($("title").text());
+  const docParts = docTitle
+    .split(TITLE_SEPARATOR_RE)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const chapterLabel = findChapterLabel($, currentUrl, docParts);
+
+  // Book title preference:
+  // 1) <h1> if present and not itself a chapter label
+  // 2) first <title> part that isn't a chapter label and isn't the last
+  //    segment (commonly the site name)
+  // 3) fall back to <h1> or first title part
+  let bookTitle: string | undefined;
+  if (h1 && !CHAPTER_LABEL_RE.test(h1)) {
+    bookTitle = h1;
+  } else if (docParts.length > 0) {
+    const trimmed = docParts.slice(0, -1).filter((p) => !CHAPTER_LABEL_RE.test(p));
+    bookTitle = trimmed[0] ?? docParts.find((p) => !CHAPTER_LABEL_RE.test(p));
+  }
+
+  const title = bookTitle || h1 || docParts[0] || "Untitled chapter";
+
+  return {
+    title,
+    bookTitle: bookTitle && bookTitle !== chapterLabel ? bookTitle : undefined,
+    chapterLabel: chapterLabel || undefined,
+  };
+}
+
+function findChapterLabel(
+  $: CheerioAPI,
+  currentUrl: string,
+  docParts: string[],
+): string | null {
+  // 1) Headings + common chapter-title classes. Pick the longest match so a
+  //    rich label ("Chapter 1125 - This Place, This Is Hell.") wins over a
+  //    bare "Chapter 1125".
+  let best: string | null = null;
+  $("h1, h2, h3, h4, .chapter-title, .entry-title, [class*='chapter-title']").each(
+    (_, el) => {
+      const t = collapseWs($(el).text());
+      if (!t || t.length > 200) return;
+      if (CHAPTER_LABEL_RE.test(t) && (!best || t.length > best.length)) best = t;
+    },
+  );
+  if (best) return best;
+
+  // 2) Anchor whose href points to the current URL — its text is often the
+  //    full chapter label (dropdowns, "you are here" markers, etc.).
+  try {
+    const cur = new URL(currentUrl);
+    let matched: string | null = null;
+    $("a").each((_, el) => {
+      if (matched) return;
+      const href = $(el).attr("href");
+      if (!href) return;
+      try {
+        const u = new URL(href, cur);
+        if (u.host !== cur.host) return;
+        if (u.pathname.replace(/\/$/, "") !== cur.pathname.replace(/\/$/, "")) return;
+        const t = collapseWs($(el).text());
+        if (CHAPTER_LABEL_RE.test(t)) matched = t;
+      } catch {
+        /* ignore */
+      }
+    });
+    if (matched) return matched;
+  } catch {
+    /* ignore */
+  }
+
+  // 3) Fall back to any "Chapter N" piece inside the <title> tag.
+  for (const part of docParts) {
+    if (CHAPTER_LABEL_RE.test(part)) return part;
+  }
+  return null;
+}
+
+function collapseWs(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
 const MIN_PARAGRAPH_LENGTH = 3;
 
 export function extractParagraphs($: CheerioAPI, scope: Cheerio<AnyNode>): string[] {

@@ -297,8 +297,10 @@ export default function Player() {
       url: chapter.url,
       title: chapter.title,
       source: chapter.source,
-      coverSeed: chapter.title,
+      coverSeed: chapter.bookTitle || chapter.title,
       lastAt: Date.now(),
+      bookTitle: chapter.bookTitle,
+      chapterLabel: chapter.chapterLabel,
     };
     setHistory((prev) => [item, ...prev.filter((p) => p.url !== item.url)].slice(0, 20));
   }, []);
@@ -462,8 +464,8 @@ export default function Player() {
     if (typeof navigator === "undefined" || !("mediaSession" in navigator) || !current)
       return;
     navigator.mediaSession.metadata = new MediaMetadata({
-      title: current.chapter.title,
-      artist: current.chapter.source,
+      title: current.chapter.chapterLabel || current.chapter.title,
+      artist: current.chapter.bookTitle || current.chapter.source,
       album: "Tome",
     });
     navigator.mediaSession.setActionHandler("play", () => void togglePlay());
@@ -687,8 +689,9 @@ export default function Player() {
                   }}
                   header={
                     <HeroCard
-                      title={current.chapter.title}
+                      title={current.chapter.bookTitle || current.chapter.title}
                       source={current.chapter.source}
+                      chapterLabel={current.chapter.chapterLabel}
                       currentPart={currentChunkIndex + 1}
                       totalParts={current.chunks.length}
                       canPrevChapter={!!current.chapter.prevUrl}

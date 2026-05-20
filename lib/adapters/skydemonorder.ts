@@ -1,17 +1,11 @@
 import * as cheerio from "cheerio";
 import type { Chapter } from "../types";
-import { extractParagraphs, findNavLinks } from "./util";
+import { extractParagraphs, extractTitles, findNavLinks } from "./util";
 
 export function parseSkyDemonOrder(html: string, url: string): Chapter {
   const $ = cheerio.load(html);
 
-  // Title: try h1 first, then <title>
-  let title = $("h1").first().text().trim();
-  if (!title) {
-    const docTitle = $("title").text().trim();
-    title = docTitle.split(/\s+[—–-]\s+/)[0].trim();
-  }
-  if (!title) title = "Untitled chapter";
+  const { title, bookTitle, chapterLabel } = extractTitles($, url);
 
   // Content: skydemonorder puts the chapter body inside a <main> / <article>
   // with paragraphs as <p> inside a prose-like container. We try the most
@@ -46,5 +40,7 @@ export function parseSkyDemonOrder(html: string, url: string): Chapter {
     nextUrl,
     prevUrl,
     source: "skydemonorder.com",
+    bookTitle,
+    chapterLabel,
   };
 }
