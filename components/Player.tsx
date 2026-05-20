@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Chapter } from "@/lib/types";
-import { chunkParagraphs } from "@/lib/chunk";
 import { EmptyState } from "@/components/player/EmptyState";
 import { Header } from "@/components/player/Header";
 import { HeroCard } from "@/components/player/HeroCard";
@@ -15,7 +14,6 @@ import type { SleepMode } from "@/components/player/SleepTimerButton";
 import { Toast } from "@/components/player/Toast";
 import type {
   Chunk,
-  ChunkStatus,
   HistoryItem,
   LoadedChapter,
 } from "@/components/player/types";
@@ -42,6 +40,57 @@ const LS_THEME = "nab:theme";
 
 type Theme = "dark" | "light";
 
+interface ChapterMetaResponse {
+  ok: true;
+  key: string;
+  voice: string;
+  chapter: Chapter;
+  chunks: Array<{ index: number; text: string; estDuration: number }>;
+}
+
+interface ChapterMetaError {
+  ok: false;
+  error: string;
+}
+
+interface HlsLike {
+  loadSource: (url: string) => void;
+  attachMedia: (audio: HTMLMediaElement) => void;
+  destroy: () => void;
+}
+
+function buildLoadedChapter(meta: ChapterMetaResponse): LoadedChapter {
+  const chunks: Chunk[] = meta.chunks.map((c) => ({
+    index: c.index,
+    text: c.text,
+    estDuration: c.estDuration,
+  }));
+  const cumDurations: number[] = [0];
+  for (let i = 0; i < chunks.length; i++) {
+    cumDurations.push(cumDurations[i] + chunks[i].estDuration);
+  }
+  return {
+    chapter: meta.chapter,
+    chunks,
+    cumDurations,
+    totalDuration: cumDurations[cumDurations.length - 1] ?? 0,
+    playlistUrl: `/api/chapter-hls?url=${encodeURIComponent(meta.chapter.url)}&voice=${encodeURIComponent(meta.voice)}`,
+    voice: meta.voice,
+  };
+}
+
+function findChunkAtTime(cumDurations: number[], t: number): number {
+  if (cumDurations.length <= 1) return 0;
+  let lo = 0;
+  let hi = cumDurations.length - 2;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >>> 1;
+    if (cumDurations[mid] <= t) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
 export default function Player() {
   const [inputUrl, setInputUrl] = useState("");
   const [current, setCurrent] = useState<LoadedChapter | null>(null);
@@ -49,6 +98,7 @@ export default function Player() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(false);
   const [voice, setVoice] = useState<string>(VOICES[0].id);
   const [playbackRate, setPlaybackRate] = useState<number>(1.15);
   const [readerFontSize, setReaderFontSize] = useState(18);
@@ -63,20 +113,19 @@ export default function Player() {
   const [headerHidden, setHeaderHidden] = useState(false);
   const [sleep, setSleep] = useState<SleepMode>(null);
   const [sleepRemainingMs, setSleepRemainingMs] = useState(0);
-  // Theme state. The initial value comes from the pre-hydration script in
-  // `app/layout.tsx`, which already set `data-theme` on <html>; we read it
-  // back here so React state stays in sync without causing a flash.
   const [theme, setTheme] = useState<Theme>("dark");
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const hlsRef = useRef<HlsLike | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const prefetchAbortRef = useRef<AbortController | null>(null);
-  // Latches intent to auto-play across chunk/chapter transitions, even if the
-  // browser fires `pause` while the next source is still loading.
+  // Latch playback intent across the (single) chapter-boundary src swap so a
+  // spurious `pause` event mid-swap can't drop us out of the playing state.
   const wantPlayRef = useRef(false);
-  // Guards one-time auto-resume of the last chapter on first mount so we
-  // don't re-trigger a load if the callback identity changes later.
   const didAutoResumeRef = useRef(false);
+  // Hold the last chunk index at which sleep="chunk" arming began. We pause
+  // when the index advances past that.
+  const sleepChunkStartRef = useRef<number | null>(null);
 
   useEffect(() => {
     const savedUrl = localStorage.getItem(LS_URL);
@@ -130,26 +179,28 @@ export default function Player() {
     try { localStorage.setItem(LS_PLAYER_VISIBLE, playerBarVisible ? "1" : "0"); } catch {}
   }, [playerBarVisible]);
 
-  // Apply playbackRate whenever it changes OR whenever the chunk index moves
-  // (new audio source). Some browsers reset rate back to 1.0 on src change,
-  // so we re-apply on each transition. onLoadedMetadata also re-applies it
-  // once the new audio element finishes loading.
+  // Re-apply playback rate when chapter swaps. Safari resets to 1.0 on src change.
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
     a.playbackRate = playbackRate;
     (a as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = true;
-  }, [playbackRate, current, currentChunkIndex]);
+  }, [playbackRate, current]);
 
-  // Sleep timer: ticks the time-based mode, fades volume in the final 10s,
-  // and pauses when time runs out. For "chunk"/"chapter" modes we just
-  // surface the label; the actual stop happens inside onEnded.
+  // Sleep timer — see comments in old impl. Volume fade fires only in "time"
+  // mode; "chunk"/"chapter" are handled in onTimeUpdate / onEnded.
   useEffect(() => {
     const a = audioRef.current;
     if (!sleep) {
       setSleepRemainingMs(0);
+      sleepChunkStartRef.current = null;
       if (a && a.volume < 1) a.volume = 1;
       return;
+    }
+    if (sleep.kind === "chunk") {
+      sleepChunkStartRef.current = currentChunkIndex;
+    } else {
+      sleepChunkStartRef.current = null;
     }
     if (sleep.kind !== "time") {
       setSleepRemainingMs(0);
@@ -182,7 +233,7 @@ export default function Player() {
     tick();
     const id = window.setInterval(tick, 250);
     return () => window.clearInterval(id);
-  }, [sleep]);
+  }, [sleep, currentChunkIndex]);
 
   const cancelSleep = useCallback(() => {
     const a = audioRef.current;
@@ -191,85 +242,55 @@ export default function Player() {
     setSleepRemainingMs(0);
   }, []);
 
-  const fetchChapter = useCallback(
-    async (url: string, signal?: AbortSignal): Promise<Chapter> => {
-      const res = await fetch(`/api/chapter?url=${encodeURIComponent(url)}`, { signal });
-      const data = await res.json();
+  const fetchChapterMeta = useCallback(
+    async (url: string, requestedVoice: string, signal?: AbortSignal): Promise<LoadedChapter> => {
+      const res = await fetch(
+        `/api/chapter-meta?url=${encodeURIComponent(url)}&voice=${encodeURIComponent(requestedVoice)}`,
+        { signal },
+      );
+      const data = (await res.json()) as ChapterMetaResponse | ChapterMetaError;
       if (!res.ok || !data.ok) {
-        throw new Error(data?.error ?? `Failed to load chapter (${res.status})`);
+        const err = !data.ok ? data.error : `Failed to load chapter (${res.status})`;
+        throw new Error(err);
       }
-      return data.chapter as Chapter;
+      return buildLoadedChapter(data);
     },
     [],
   );
 
-  const buildChunks = useCallback((chapter: Chapter): Chunk[] => {
-    return chunkParagraphs(chapter.paragraphs).map((text, index) => ({
-      index,
-      text,
-      blobUrl: null,
-      status: "pending" as ChunkStatus,
-    }));
+  const detachHls = useCallback(() => {
+    const hls = hlsRef.current;
+    if (hls) {
+      try { hls.destroy(); } catch {}
+      hlsRef.current = null;
+    }
   }, []);
 
-  const fetchChunkAudio = useCallback(
-    async (text: string, signal?: AbortSignal): Promise<string> => {
-      const res = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, voice }),
-        signal,
-      });
-      if (!res.ok) throw new Error(`TTS failed (${res.status})`);
-      return URL.createObjectURL(await res.blob());
-    },
-    [voice],
-  );
-
-  const preloadChunk = useCallback(
-    async (
-      loaded: LoadedChapter,
-      // Functional-update setter so concurrent preloads never clobber each
-      // other's results. The chapter-URL guard discards completions that
-      // arrive after a chapter change (C1 + C2).
-      setLoaded: (updater: (prev: LoadedChapter | null) => LoadedChapter | null) => void,
-      chunkIndex: number,
-      signal?: AbortSignal,
-    ) => {
-      const chunk = loaded.chunks[chunkIndex];
-      if (!chunk || chunk.status === "ready" || chunk.status === "loading") return;
-      const { url } = loaded.chapter;
-      const text = chunk.text;
-      setLoaded((prev) => {
-        if (!prev || prev.chapter.url !== url) return prev;
-        const chunks = [...prev.chunks];
-        chunks[chunkIndex] = { ...chunks[chunkIndex], status: "loading" };
-        return { ...prev, chunks };
-      });
-      try {
-        const blobUrl = await fetchChunkAudio(text, signal);
-        setLoaded((prev) => {
-          if (!prev || prev.chapter.url !== url) return prev;
-          const chunks = [...prev.chunks];
-          chunks[chunkIndex] = { ...chunks[chunkIndex], blobUrl, status: "ready" };
-          return { ...prev, chunks };
-        });
-      } catch (err) {
-        if ((err as Error).name === "AbortError") return;
-        setLoaded((prev) => {
-          if (!prev || prev.chapter.url !== url) return prev;
-          const chunks = [...prev.chunks];
-          chunks[chunkIndex] = {
-            ...chunks[chunkIndex],
-            status: "error",
-            error: (err as Error).message,
-          };
-          return { ...prev, chunks };
-        });
+  const attachSource = useCallback(async (playlistUrl: string) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    detachHls();
+    const native = audio.canPlayType("application/vnd.apple.mpegurl");
+    if (native) {
+      audio.src = playlistUrl;
+      audio.load();
+      return;
+    }
+    try {
+      const mod = await import("hls.js");
+      const Hls = (mod as unknown as { default: typeof import("hls.js").default }).default;
+      if (Hls.isSupported()) {
+        const hls = new Hls({ enableWorker: false });
+        hls.loadSource(playlistUrl);
+        hls.attachMedia(audio);
+        hlsRef.current = hls as unknown as HlsLike;
+        return;
       }
-    },
-    [fetchChunkAudio],
-  );
+    } catch {}
+    // Last-resort: try native even if canPlayType lied
+    audio.src = playlistUrl;
+    audio.load();
+  }, [detachHls]);
 
   const pushHistory = useCallback((chapter: Chapter) => {
     const item: HistoryItem = {
@@ -291,44 +312,29 @@ export default function Player() {
       setError(null);
       setChapterLoading(true);
       setIsPlaying(false);
-      if (current)
-        for (const c of current.chunks) if (c.blobUrl) URL.revokeObjectURL(c.blobUrl);
-      if (nextPrefetch)
-        for (const c of nextPrefetch.chunks)
-          if (c.blobUrl) URL.revokeObjectURL(c.blobUrl);
       setNextPrefetch(null);
       try {
-        const chapter = await fetchChapter(url, ac.signal);
-        const loaded: LoadedChapter = { chapter, chunks: buildChunks(chapter) };
+        const loaded = await fetchChapterMeta(url, voice, ac.signal);
+        if (ac.signal.aborted) return;
         setCurrent(loaded);
         setCurrentChunkIndex(0);
-        localStorage.setItem(LS_URL, url);
-        pushHistory(chapter);
-        await preloadChunk(loaded, setCurrent, 0, ac.signal);
-        if (loaded.chunks.length > 1)
-          preloadChunk(loaded, setCurrent, 1, ac.signal).catch(() => {});
+        setChunkPosition(0);
+        setChunkDuration(loaded.chunks[0]?.estDuration ?? 0);
+        try { localStorage.setItem(LS_URL, url); } catch {}
+        pushHistory(loaded.chapter);
+        if (autoplay) wantPlayRef.current = true;
+        await attachSource(loaded.playlistUrl);
         setChapterLoading(false);
-        if (autoplay) {
-          const a = audioRef.current;
-          if (a) {
-            try {
-              await a.play();
-              setIsPlaying(true);
-            } catch {}
-          }
-        }
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
         setChapterLoading(false);
         setError((err as Error).message);
       }
     },
-    [buildChunks, current, fetchChapter, nextPrefetch, preloadChunk, pushHistory],
+    [attachSource, fetchChapterMeta, pushHistory, voice],
   );
 
-  // Auto-resume the last chapter on first mount. `loadChapterFromUrl` itself
-  // will pick up the saved chunk index + offset from the per-chapter position
-  // key. Runs exactly once thanks to the ref latch.
+  // First-mount auto-resume.
   useEffect(() => {
     if (didAutoResumeRef.current) return;
     const savedUrl = localStorage.getItem(LS_URL);
@@ -337,6 +343,18 @@ export default function Player() {
     void loadChapterFromUrl(savedUrl, false);
   }, [loadChapterFromUrl]);
 
+  // Reload chapter when voice changes mid-session (server cache keyed by voice).
+  // Only fires if a chapter is already loaded and the voice actually changed.
+  const lastVoiceRef = useRef(voice);
+  useEffect(() => {
+    if (lastVoiceRef.current === voice) return;
+    lastVoiceRef.current = voice;
+    if (!current) return;
+    void loadChapterFromUrl(current.chapter.url, isPlaying);
+  }, [voice, current, isPlaying, loadChapterFromUrl]);
+
+  // Pre-warm next chapter's parse + segment cache on the server. We only need
+  // the meta to know it's valid; segments synth lazy on transition.
   useEffect(() => {
     if (!current?.chapter.nextUrl) return;
     if (nextPrefetch && nextPrefetch.chapter.url === current.chapter.nextUrl) return;
@@ -345,142 +363,57 @@ export default function Player() {
     prefetchAbortRef.current = ac;
     (async () => {
       try {
-        const ch = await fetchChapter(current.chapter.nextUrl!, ac.signal);
-        const loaded: LoadedChapter = { chapter: ch, chunks: buildChunks(ch) };
+        const loaded = await fetchChapterMeta(current.chapter.nextUrl!, voice, ac.signal);
+        if (ac.signal.aborted) return;
         setNextPrefetch(loaded);
-        preloadChunk(loaded, setNextPrefetch, 0, ac.signal).catch(() => {});
       } catch {}
     })();
-  }, [current, nextPrefetch, fetchChapter, buildChunks, preloadChunk]);
+    return () => ac.abort();
+  }, [current, nextPrefetch, fetchChapterMeta, voice]);
 
+  // Restore saved position once chapter is attached + metadata loaded.
+  const pendingRestoreRef = useRef<{ chapter: string; time: number } | null>(null);
   useEffect(() => {
     if (!current) return;
-    // Thread the active AbortController's signal so chapter-change aborts also
-    // cancel in-flight chunk preloads (pairs with the URL-guard in preloadChunk).
-    const signal = abortRef.current?.signal;
-    for (const offset of [1, 2, 3]) {
-      if (current.chunks[currentChunkIndex + offset]?.status === "pending") {
-        preloadChunk(current, setCurrent, currentChunkIndex + offset, signal).catch(() => {});
+    const key = LS_POSITION_PREFIX + current.chapter.url;
+    const saved = localStorage.getItem(key);
+    if (!saved) return;
+    try {
+      const pos = JSON.parse(saved);
+      let time = 0;
+      if (typeof pos?.time === "number") {
+        time = pos.time;
+      } else if (typeof pos?.chunk === "number") {
+        const idx = Math.max(0, Math.min(current.chunks.length - 1, pos.chunk));
+        time = current.cumDurations[idx] + (typeof pos.offset === "number" ? pos.offset : 0);
       }
-    }
-  }, [currentChunkIndex, current, preloadChunk]);
-
-  const currentChunk = current?.chunks[currentChunkIndex];
-  const audioSrc = currentChunk?.blobUrl ?? "";
-
-  // Manage audio src imperatively so onEnded can advance audio synchronously
-  // (within the ended event stack) without React's reconciliation later
-  // clobbering the src we already set and triggering a reload.
-  //
-  // CRITICAL for background playback: when the next chunk's TTS blob hasn't
-  // arrived yet, `audioSrc` is empty. We MUST NOT clear the element's src in
-  // that window — iOS/Android revoke our background audio focus the moment
-  // the element goes idle with no src, which breaks any subsequent play()
-  // call. Keep the previous (ended) blob attached until a real new blob is
-  // ready to swap in.
-  useEffect(() => {
-    const a = audioRef.current;
-    if (!a) return;
-    if (!audioSrc) {
-      // Only drop src when there's no pending resume intent AND we aren't
-      // actively playing — e.g. user stopped, chapter unloaded, nothing queued.
-      if (!wantPlayRef.current && !isPlaying && a.hasAttribute("src")) {
-        a.removeAttribute("src");
+      if (time > 0 && time < current.totalDuration - 1) {
+        pendingRestoreRef.current = { chapter: current.chapter.url, time };
       }
-      return;
-    }
-    if (a.src !== audioSrc) a.src = audioSrc;
-  }, [audioSrc, isPlaying]);
+    } catch {}
+  }, [current]);
 
-  useEffect(() => {
-    const a = audioRef.current;
-    if (!a || !audioSrc) return;
-    if (wantPlayRef.current || isPlaying) {
-      wantPlayRef.current = false;
-      a.play()
-        .then(() => setIsPlaying(true))
-        .catch(() => setIsPlaying(false));
-    }
-  }, [audioSrc, isPlaying]);
-
+  // Auto-advance to next chapter on end.
   const onEnded = useCallback(() => {
-    const a = audioRef.current;
-    if (!current || !a) return;
-    const nextIdx = currentChunkIndex + 1;
-
-    // Sleep timer: stop at the end of the current part.
-    if (sleep?.kind === "chunk") {
-      wantPlayRef.current = false;
-      setIsPlaying(false);
-      setSleep(null);
-      return;
-    }
-
-    if (nextIdx < current.chunks.length) {
-      const nextBlobUrl = current.chunks[nextIdx]?.blobUrl;
-      if (nextBlobUrl) {
-        // Advance audio synchronously within the ended event so backgrounded tabs
-        // and locked screens can't block play() via throttled React renders.
-        a.src = nextBlobUrl;
-        a.play().catch(() => { wantPlayRef.current = true; });
-      } else {
-        // Blob not ready yet. Kick off the fetch imperatively (React effects
-        // are throttled when backgrounded) and keep the previous src mounted
-        // so iOS/Android don't revoke our audio focus while we wait.
-        wantPlayRef.current = true;
-        if (current.chunks[nextIdx]?.status === "pending") {
-          preloadChunk(current, setCurrent, nextIdx).catch(() => {});
-        }
-      }
-      setCurrentChunkIndex(nextIdx);
-      return;
-    }
-
-    // Sleep timer: stop at the end of the chapter (final chunk just ended).
+    if (!current) return;
     if (sleep?.kind === "chapter") {
       wantPlayRef.current = false;
       setIsPlaying(false);
       setSleep(null);
       return;
     }
-
-    if (nextPrefetch) {
-      for (const c of current.chunks) if (c.blobUrl) URL.revokeObjectURL(c.blobUrl);
-      const firstBlobUrl = nextPrefetch.chunks[0]?.blobUrl;
-      if (firstBlobUrl) {
-        a.src = firstBlobUrl;
-        a.play().catch(() => { wantPlayRef.current = true; });
-      } else {
-        // Same background-safe path as chunk-level: kick off preload imperatively,
-        // keep old src attached so audio focus isn't revoked while we wait.
-        wantPlayRef.current = true;
-        if (nextPrefetch.chunks[0]?.status === "pending") {
-          preloadChunk(nextPrefetch, setCurrent, 0).catch(() => {});
-        }
-      }
-      setCurrent(nextPrefetch);
-      setNextPrefetch(null);
-      setCurrentChunkIndex(0);
-      localStorage.setItem(LS_URL, nextPrefetch.chapter.url);
-      // Keep the "most recent" sort order fresh so reopening the app jumps
-      // straight to whatever was playing last, even on background auto-advance.
-      pushHistory(nextPrefetch.chapter);
-      setIsPlaying(true);
-      return;
-    }
     if (current.chapter.nextUrl) {
       wantPlayRef.current = true;
-      return void loadChapterFromUrl(current.chapter.nextUrl, true);
+      void loadChapterFromUrl(current.chapter.nextUrl, true);
+      return;
     }
     setIsPlaying(false);
-  }, [current, currentChunkIndex, nextPrefetch, loadChapterFromUrl, sleep, pushHistory, preloadChunk]);
+  }, [current, sleep, loadChapterFromUrl]);
 
   const togglePlay = useCallback(async () => {
     const a = audioRef.current;
     if (!a || !current) return;
     if (a.paused) {
-      if (!audioSrc && (currentChunk?.status === "pending" || currentChunk?.status === "error"))
-        preloadChunk(current, setCurrent, currentChunkIndex).catch(() => {});
       try {
         await a.play();
         setIsPlaying(true);
@@ -491,35 +424,32 @@ export default function Player() {
       a.pause();
       setIsPlaying(false);
     }
-  }, [audioSrc, current, currentChunk, currentChunkIndex, preloadChunk]);
+  }, [current]);
+
+  const seekAbsolute = useCallback((t: number) => {
+    const a = audioRef.current;
+    if (!a) return;
+    a.currentTime = Math.max(0, t);
+  }, []);
 
   const seekSeconds = useCallback(
     (delta: number) => {
       const a = audioRef.current;
       if (!a || !current) return;
       const newT = a.currentTime + delta;
-      if (newT < 0) {
-        if (currentChunkIndex > 0) setCurrentChunkIndex(currentChunkIndex - 1);
-        else a.currentTime = 0;
-        return;
-      }
-      if (newT > a.duration) {
-        if (currentChunkIndex < current.chunks.length - 1)
-          setCurrentChunkIndex(currentChunkIndex + 1);
-        else a.currentTime = Math.max(0, a.duration - 0.1);
-        return;
-      }
-      a.currentTime = newT;
+      seekAbsolute(Math.min(Math.max(0, newT), current.totalDuration - 0.1));
     },
-    [current, currentChunkIndex],
+    [current, seekAbsolute],
   );
 
-  const seekTo = useCallback((next: number) => {
-    const a = audioRef.current;
-    if (!a) return;
-    a.currentTime = next;
-    setChunkPosition(next);
-  }, []);
+  const onPickChunk = useCallback(
+    (i: number) => {
+      if (!current) return;
+      const idx = Math.max(0, Math.min(current.chunks.length - 1, i));
+      seekAbsolute(current.cumDurations[idx]);
+    },
+    [current, seekAbsolute],
+  );
 
   const goPrevChapter = useCallback(() => {
     if (current?.chapter.prevUrl) loadChapterFromUrl(current.chapter.prevUrl, true);
@@ -542,7 +472,7 @@ export default function Player() {
     navigator.mediaSession.setActionHandler("previoustrack", goPrevChapter);
     navigator.mediaSession.setActionHandler("seekbackward", (d) => seekSeconds(-(d.seekOffset ?? 15)));
     navigator.mediaSession.setActionHandler("seekforward", (d) => seekSeconds(d.seekOffset ?? 15));
-    navigator.mediaSession.setActionHandler("seekto", (d) => { if (d.seekTime != null) seekTo(d.seekTime); });
+    navigator.mediaSession.setActionHandler("seekto", (d) => { if (d.seekTime != null) seekAbsolute(d.seekTime); });
     return () => {
       navigator.mediaSession.setActionHandler("play", null);
       navigator.mediaSession.setActionHandler("pause", null);
@@ -552,18 +482,15 @@ export default function Player() {
       navigator.mediaSession.setActionHandler("seekforward", null);
       navigator.mediaSession.setActionHandler("seekto", null);
     };
-  }, [current, togglePlay, goPrevChapter, goNextChapter, seekSeconds, seekTo]);
+  }, [current, togglePlay, goPrevChapter, goNextChapter, seekSeconds, seekAbsolute]);
 
   useEffect(() => {
     if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
     navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
   }, [isPlaying]);
 
-  // Persist playback position: a 3s interval covers the common case, and
-  // `visibilitychange` / `pagehide` / `beforeunload` guarantee a final flush
-  // when the user switches tabs, locks their phone, or closes the app — the
-  // interval is throttled or paused in background, so those events are what
-  // actually keep resume-on-reopen accurate.
+  // Persist playback position: save raw `audio.currentTime` on a 3s interval +
+  // visibility/pagehide/beforeunload guards. Same triple-guard as old impl.
   useEffect(() => {
     if (!current) return;
     const key = LS_POSITION_PREFIX + current.chapter.url;
@@ -571,10 +498,7 @@ export default function Player() {
       const a = audioRef.current;
       if (!a) return;
       try {
-        localStorage.setItem(
-          key,
-          JSON.stringify({ chunk: currentChunkIndex, offset: a.currentTime }),
-        );
+        localStorage.setItem(key, JSON.stringify({ time: a.currentTime }));
       } catch {}
     };
     const t = setInterval(save, 3000);
@@ -591,54 +515,48 @@ export default function Player() {
       window.removeEventListener("pagehide", onHide);
       window.removeEventListener("beforeunload", onHide);
     };
-  }, [current, currentChunkIndex]);
-
-  useEffect(() => {
-    if (!current) return;
-    const key = LS_POSITION_PREFIX + current.chapter.url;
-    const saved = localStorage.getItem(key);
-    if (!saved) return;
-    try {
-      const pos = JSON.parse(saved);
-      if (
-        typeof pos?.chunk === "number" &&
-        pos.chunk >= 0 &&
-        pos.chunk < current.chunks.length
-      ) {
-        setCurrentChunkIndex(pos.chunk);
-      }
-    } catch {}
-  }, [current?.chapter.url]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [current]);
 
   const onLoadedMetadata = useCallback(() => {
     const a = audioRef.current;
     if (!a || !current) return;
-    // Re-assert playback rate: some browsers drop it back to 1.0 when the
-    // audio source changes between chunks/chapters.
     a.playbackRate = playbackRate;
     (a as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = true;
-    setChunkDuration(a.duration || 0);
-    const key = LS_POSITION_PREFIX + current.chapter.url;
-    try {
-      const saved = localStorage.getItem(key);
-      if (!saved) return;
-      const pos = JSON.parse(saved);
-      if (pos?.chunk === currentChunkIndex && typeof pos.offset === "number") {
-        if (pos.offset > 0 && pos.offset < (a.duration || Infinity) - 1)
-          a.currentTime = pos.offset;
-        localStorage.removeItem(key);
-      }
-    } catch {}
-  }, [current, currentChunkIndex, playbackRate]);
+    const pending = pendingRestoreRef.current;
+    if (pending && pending.chapter === current.chapter.url) {
+      try {
+        a.currentTime = pending.time;
+      } catch {}
+      pendingRestoreRef.current = null;
+    }
+    if (wantPlayRef.current) {
+      wantPlayRef.current = false;
+      a.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+    }
+  }, [current, playbackRate]);
 
   const onTimeUpdate = useCallback(() => {
     const a = audioRef.current;
-    if (!a) return;
-    setChunkPosition(a.currentTime);
-  }, []);
+    if (!a || !current) return;
+    const t = a.currentTime;
+    setChunkPosition(t - current.cumDurations[currentChunkIndex]);
+    const idx = findChunkAtTime(current.cumDurations, t);
+    if (idx !== currentChunkIndex) {
+      setCurrentChunkIndex(idx);
+      setChunkDuration(current.chunks[idx]?.estDuration ?? 0);
+      // Sleep "chunk" mode: pause as soon as the chunk we armed on finishes.
+      if (sleep?.kind === "chunk" && sleepChunkStartRef.current !== null) {
+        if (idx > sleepChunkStartRef.current) {
+          a.pause();
+          wantPlayRef.current = false;
+          setIsPlaying(false);
+          setSleep(null);
+        }
+      }
+    }
+  }, [current, currentChunkIndex, sleep]);
 
-  // Double-tap/click anywhere brings the header back. Requires two quick taps
-  // so a single accidental tap while reading doesn't pop the menu open.
+  // Double-tap brings header back when hidden.
   useEffect(() => {
     if (!headerHidden) return;
     const DOUBLE_TAP_MS = 350;
@@ -689,12 +607,17 @@ export default function Player() {
     return () => window.removeEventListener("keydown", onKey);
   }, [togglePlay, seekSeconds, goPrevChapter, goNextChapter]);
 
+  // Cleanup hls.js instance on unmount.
+  useEffect(() => {
+    return () => detachHls();
+  }, [detachHls]);
+
   const progressPercent = useMemo(() => {
-    if (!current || current.chunks.length === 0) return 0;
-    const per = 1 / current.chunks.length;
-    const chunkFrac = chunkDuration > 0 ? chunkPosition / chunkDuration : 0;
-    return (currentChunkIndex + Math.min(chunkFrac, 1)) * per * 100;
-  }, [current, currentChunkIndex, chunkPosition, chunkDuration]);
+    if (!current || current.totalDuration <= 0) return 0;
+    const a = audioRef.current;
+    const t = a?.currentTime ?? current.cumDurations[currentChunkIndex] + chunkPosition;
+    return Math.min(100, (t / current.totalDuration) * 100);
+  }, [current, currentChunkIndex, chunkPosition]);
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -703,6 +626,8 @@ export default function Player() {
     setSidebarOpen(false);
     void loadChapterFromUrl(u, false);
   };
+
+  const currentChunk = current?.chunks[currentChunkIndex];
 
   return (
     <div className="flex h-dvh flex-col bg-[var(--color-bg)]">
@@ -750,11 +675,7 @@ export default function Player() {
                 <ReaderPanel
                   chunks={current.chunks}
                   currentChunkIndex={currentChunkIndex}
-                  onPickChunk={(index) =>
-                    setCurrentChunkIndex(
-                      Math.max(0, Math.min(current.chunks.length - 1, index)),
-                    )
-                  }
+                  onPickChunk={onPickChunk}
                   readerFontSize={readerFontSize}
                   readingMode={!playerBarVisible}
                   onUserScroll={() => setHeaderHidden(true)}
@@ -821,15 +742,20 @@ export default function Player() {
         onEnded={onEnded}
         onLoadedMetadata={onLoadedMetadata}
         onTimeUpdate={onTimeUpdate}
+        onWaiting={() => setIsBuffering(true)}
+        onCanPlay={() => setIsBuffering(false)}
+        onPlaying={() => { setIsBuffering(false); setIsPlaying(true); }}
         onPause={() => {
-          // Ignore pause events that fire while we're mid-transition to the
-          // next chunk (no src yet or we already intend to play as soon as it
-          // loads). This keeps auto-advance working even if the next chunk's
-          // TTS hasn't finished yet.
-          if (wantPlayRef.current || !audioSrc) return;
+          if (wantPlayRef.current) return;
           setIsPlaying(false);
         }}
         onPlay={() => setIsPlaying(true)}
+        onError={() => {
+          setIsBuffering(false);
+          // Recover by re-attaching the playlist; HLS players sometimes fall over
+          // on stale tokens or transient 5xx from the segment route.
+          if (current) void attachSource(current.playlistUrl);
+        }}
         preload="auto"
         playsInline
       />
@@ -840,22 +766,20 @@ export default function Player() {
           isPlaying={isPlaying}
           progressPercent={progressPercent}
           currentTime={chunkPosition}
-          duration={chunkDuration}
-          onSeek={seekTo}
+          duration={chunkDuration || (currentChunk?.estDuration ?? 0)}
+          onSeek={(next) => {
+            if (!current) return;
+            seekAbsolute(current.cumDurations[currentChunkIndex] + next);
+          }}
           onTogglePlay={togglePlay}
           onSkipBack={() => seekSeconds(-15)}
           onSkipFwd={() => seekSeconds(15)}
           currentChunkIndex={currentChunkIndex}
           totalChunks={current?.chunks.length ?? 0}
-          currentChunkStatus={currentChunk?.status ?? "pending"}
-          chunkStatuses={current?.chunks.map((c) => c.status) ?? []}
-          prefetchReady={
-            !!nextPrefetch?.chunks[0] && nextPrefetch.chunks[0].status === "ready"
-          }
-          onPickChunk={(i) =>
-            current &&
-            setCurrentChunkIndex(Math.max(0, Math.min(current.chunks.length - 1, i)))
-          }
+          isBuffering={isBuffering}
+          hasError={!!error}
+          prefetchReady={!!nextPrefetch}
+          onPickChunk={onPickChunk}
           sleep={sleep}
           sleepRemainingMs={sleepRemainingMs}
           onSleepSet={setSleep}

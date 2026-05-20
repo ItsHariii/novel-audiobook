@@ -1,4 +1,3 @@
-import type { ChunkStatus } from "@/components/player/types";
 import { ChunkDots } from "@/components/player/ChunkDots";
 import { PlaybackSpeedButton } from "@/components/player/PlaybackSpeedButton";
 import { SleepTimerButton, type SleepMode } from "@/components/player/SleepTimerButton";
@@ -22,8 +21,8 @@ export function PlayerBar(props: {
   onSkipFwd: () => void;
   currentChunkIndex: number;
   totalChunks: number;
-  currentChunkStatus: ChunkStatus;
-  chunkStatuses: ChunkStatus[];
+  isBuffering: boolean;
+  hasError: boolean;
   prefetchReady: boolean;
   onPickChunk: (i: number) => void;
   sleep: SleepMode;
@@ -33,8 +32,8 @@ export function PlayerBar(props: {
   playbackRate: number;
   onPlaybackRate: (rate: number) => void;
 }) {
-  const isLoading = props.currentChunkStatus === "loading";
-  const hasError = props.currentChunkStatus === "error";
+  const isLoading = props.isBuffering;
+  const hasError = props.hasError;
 
   return (
     <div className="fixed inset-x-0 bottom-0 z-20 border-t border-[var(--color-border)] bg-[var(--color-bg)]/85 backdrop-blur-xl">
@@ -93,7 +92,6 @@ export function PlayerBar(props: {
                 total={props.totalChunks}
                 currentIndex={props.currentChunkIndex}
                 onPick={props.onPickChunk}
-                statusOf={(i) => props.chunkStatuses[i] ?? "pending"}
               />
             </div>
           )}
