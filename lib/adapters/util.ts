@@ -74,20 +74,39 @@ export function findNavLinks(
   if (relNext) nextUrl = absolutize(relNext, base);
   if (relPrev) prevUrl = absolutize(relPrev, base);
 
-  // Text-based search through anchors
+  // Whole-string label match. Length-capped to avoid matching the word "next"
+  // or "previous" embedded inside chapter titles (e.g. "We Are Not Next To It").
+  const NEXT_LABEL =
+    /^(?:next(?:\s+(?:chapter|ep|episode))?(?:\s*[→›»])?|[→›»]\s*next|[→›»])$/i;
+  const PREV_LABEL =
+    /^(?:prev(?:ious)?(?:\s+(?:chapter|ep|episode))?(?:\s*[←‹«])?|[←‹«]\s*prev(?:ious)?|[←‹«])$/i;
+  const isLabel = (s: string, re: RegExp) => {
+    const t = s.replace(/\s+/g, " ").trim();
+    return t.length > 0 && t.length <= 25 && re.test(t);
+  };
+
   $("a").each((_, el) => {
     const $el = $(el);
     const href = $el.attr("href");
     if (!href) return;
-    const text = $el.text().trim().toLowerCase();
-    const ariaLabel = ($el.attr("aria-label") || "").trim().toLowerCase();
-    const title = ($el.attr("title") || "").trim().toLowerCase();
+    const text = $el.text();
+    const ariaLabel = $el.attr("aria-label") || "";
+    const title = $el.attr("title") || "";
 
-    const all = `${text} ${ariaLabel} ${title}`;
-    if (!nextUrl && /(^|\s)(next|next chapter|next ep|next episode|→|›|»)(\s|$)/i.test(all)) {
+    if (
+      !nextUrl &&
+      (isLabel(text, NEXT_LABEL) ||
+        isLabel(ariaLabel, NEXT_LABEL) ||
+        isLabel(title, NEXT_LABEL))
+    ) {
       nextUrl = absolutize(href, base);
     }
-    if (!prevUrl && /(^|\s)(prev|previous|previous chapter|prev chapter|prev ep|previous ep|←|‹|«)(\s|$)/i.test(all)) {
+    if (
+      !prevUrl &&
+      (isLabel(text, PREV_LABEL) ||
+        isLabel(ariaLabel, PREV_LABEL) ||
+        isLabel(title, PREV_LABEL))
+    ) {
       prevUrl = absolutize(href, base);
     }
   });
