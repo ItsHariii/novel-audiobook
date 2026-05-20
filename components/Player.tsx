@@ -126,6 +126,11 @@ export default function Player() {
   // Hold the last chunk index at which sleep="chunk" arming began. We pause
   // when the index advances past that.
   const sleepChunkStartRef = useRef<number | null>(null);
+  // Re-entry guard for chapter-boundary crossover. We chain the next chapter
+  // into the HLS playlist so audio keeps playing when the PWA is backgrounded
+  // (JS suspended). When JS resumes, `timeupdate`/`ended` can both observe an
+  // overshoot — this ref ensures we only transition once per crossing.
+  const transitioningRef = useRef(false);
 
   useEffect(() => {
     const savedUrl = localStorage.getItem(LS_URL);
@@ -315,6 +320,7 @@ export default function Player() {
       setChapterLoading(true);
       setIsPlaying(false);
       setNextPrefetch(null);
+      transitioningRef.current = false;
       try {
         const loaded = await fetchChapterMeta(url, voice, ac.signal);
         if (ac.signal.aborted) return;
@@ -334,6 +340,40 @@ export default function Player() {
       }
     },
     [attachSource, fetchChapterMeta, pushHistory, voice],
+  );
+
+  // Seamless transition to the chained next chapter without going through
+  // /api/chapter-meta again (we already have the prefetched LoadedChapter).
+  // The new playlist URL (chained B+C) replaces audio.src; we seek to `offset`
+  // so playback resumes at the right spot. Used when boundary detection (in
+  // onTimeUpdate / onEnded) observes that the audio is past the current
+  // chapter's end — which happens when JS was suspended (PWA backgrounded)
+  // while the chained HLS playlist played past the chapter boundary inline.
+  const crossoverToNext = useCallback(
+    async (next: LoadedChapter, offset: number) => {
+      if (transitioningRef.current) return;
+      transitioningRef.current = true;
+      try {
+        abortRef.current?.abort();
+        prefetchAbortRef.current?.abort();
+        setNextPrefetch(null);
+        setCurrent(next);
+        setCurrentChunkIndex(0);
+        setChunkPosition(0);
+        setChunkDuration(next.chunks[0]?.estDuration ?? 0);
+        try { localStorage.setItem(LS_URL, next.chapter.url); } catch {}
+        pushHistory(next.chapter);
+        // Resume at the overshoot offset (clamped) once the new playlist's
+        // metadata loads. wantPlay carries playback intent across the swap.
+        const target = Math.max(0, Math.min(offset, next.totalDuration - 0.5));
+        pendingRestoreRef.current = { chapter: next.chapter.url, time: target };
+        wantPlayRef.current = true;
+        await attachSource(next.playlistUrl);
+      } finally {
+        transitioningRef.current = false;
+      }
+    },
+    [attachSource, pushHistory],
   );
 
   // First-mount auto-resume.
@@ -404,13 +444,23 @@ export default function Player() {
       setSleep(null);
       return;
     }
+    const a = audioRef.current;
+    // Crossover catch-up: if the chained playlist played past the chapter
+    // boundary while JS was suspended (PWA backgrounded), `ended` may fire
+    // before `timeupdate` had a chance to swap state. In that case the
+    // prefetched next chapter is the chapter we just finished — advance to
+    // *its* nextUrl instead of replaying it.
+    if (a && nextPrefetch && a.currentTime > current.totalDuration + 0.25) {
+      void crossoverToNext(nextPrefetch, a.currentTime - current.totalDuration);
+      return;
+    }
     if (current.chapter.nextUrl) {
       wantPlayRef.current = true;
       void loadChapterFromUrl(current.chapter.nextUrl, true);
       return;
     }
     setIsPlaying(false);
-  }, [current, sleep, loadChapterFromUrl]);
+  }, [current, sleep, loadChapterFromUrl, nextPrefetch, crossoverToNext]);
 
   const togglePlay = useCallback(async () => {
     const a = audioRef.current;
@@ -540,7 +590,15 @@ export default function Player() {
   const onTimeUpdate = useCallback(() => {
     const a = audioRef.current;
     if (!a || !current) return;
+    if (transitioningRef.current) return;
     const t = a.currentTime;
+    // Chapter boundary: the chained HLS playlist has played past the end of
+    // the current chapter (typical when the PWA was backgrounded). Swap to
+    // the prefetched next chapter, seeking to the overshoot offset.
+    if (t > current.totalDuration + 0.25 && nextPrefetch) {
+      void crossoverToNext(nextPrefetch, t - current.totalDuration);
+      return;
+    }
     setChunkPosition(t - current.cumDurations[currentChunkIndex]);
     const idx = findChunkAtTime(current.cumDurations, t);
     if (idx !== currentChunkIndex) {
@@ -556,7 +614,7 @@ export default function Player() {
         }
       }
     }
-  }, [current, currentChunkIndex, sleep]);
+  }, [current, currentChunkIndex, sleep, nextPrefetch, crossoverToNext]);
 
   // Double-tap brings header back when hidden.
   useEffect(() => {

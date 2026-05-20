@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ChapterFetchError, loadChapter } from "@/lib/hls/parse";
-import { buildPlaylist } from "@/lib/hls/playlist";
+import { buildPlaylist, type PlaylistChapter } from "@/lib/hls/playlist";
 import { normalizeVoice } from "@/lib/tts/voices";
 
 export const runtime = "nodejs";
@@ -16,7 +16,22 @@ export async function GET(req: NextRequest) {
 
   try {
     const { cached } = await loadChapter(url, voice);
-    const playlist = buildPlaylist(cached.segments, url, voice);
+    const blocks: PlaylistChapter[] = [
+      { url, segments: cached.segments },
+    ];
+    // Best-effort: chain the next chapter inline so playback continues across
+    // chapter boundaries when JS is suspended (PWA backgrounded / phone
+    // locked). If the next chapter fails to parse, we just serve the current
+    // chapter and the client falls back to its `onEnded` advance path.
+    if (cached.chapter.nextUrl) {
+      try {
+        const next = await loadChapter(cached.chapter.nextUrl, voice);
+        blocks.push({ url: cached.chapter.nextUrl, segments: next.cached.segments });
+      } catch {
+        /* ignore — current chapter still plays */
+      }
+    }
+    const playlist = buildPlaylist(blocks, voice);
     return new Response(playlist, {
       status: 200,
       headers: {
