@@ -17,6 +17,18 @@ const lora = Lora({
 export const metadata: Metadata = {
   title: "Tome",
   description: "Listen to web novels as an audiobook",
+  manifest: "/manifest.webmanifest",
+  applicationName: "Tome",
+  // Tells iOS to treat the home-screen install as a standalone PWA (own
+  // process, own background audio quota) rather than a Safari shortcut.
+  // Without this, Safari's bg restrictions apply even after "Add to Home
+  // Screen", which is the most common cause of bg playback being killed.
+  appleWebApp: {
+    capable: true,
+    title: "Tome",
+    statusBarStyle: "black-translucent",
+  },
+  formatDetection: { telephone: false },
 };
 
 export const viewport: Viewport = {
