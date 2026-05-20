@@ -92,21 +92,38 @@ export function findNavLinks(
     }
   });
 
-  // Heuristic fallback: for URLs of the form /.../{n}-slug try {n+1}-slug and
-  // {n-1}-slug. This only works if the site preserves slug structure; when
-  // both explicit and heuristic fail we simply return null.
+  // Heuristic fallback: scan on-page anchors for a sibling URL whose last
+  // path segment is the current segment with its embedded chapter number
+  // shifted by ±1. Supports two slug shapes:
+  //   A) {n}-slug          e.g. /project/1125-foo
+  //   B) slug-{n}          e.g. /novel/return-of-the-mount-hua-sect/chapter-1125
+  // When both explicit nav and heuristic fail we return null.
   const pathParts = base.pathname.split("/").filter(Boolean);
   const last = pathParts[pathParts.length - 1];
-  const match = last?.match(/^(\d+)-(.+)$/);
-  if (match) {
-    const num = parseInt(match[1], 10);
-    const prefix = pathParts.slice(0, -1).join("/");
+  const prefix = pathParts.slice(0, -1).join("/");
+
+  let num: number | null = null;
+  let needleFor: ((n: number) => RegExp) | null = null;
+
+  const matchA = last?.match(/^(\d+)-(.+)$/);
+  const matchB = last?.match(/^(.+?)-(\d+)$/);
+  if (matchA) {
+    num = parseInt(matchA[1], 10);
+    needleFor = (n) => new RegExp(`^/?${escapeRegex(prefix)}/${n}-`);
+  } else if (matchB) {
+    num = parseInt(matchB[2], 10);
+    const slug = matchB[1];
+    needleFor = (n) =>
+      new RegExp(`^/?${escapeRegex(prefix)}/${escapeRegex(slug)}-${n}/?$`);
+  }
+
+  if (num !== null && needleFor) {
     if (!nextUrl) {
-      const candidate = findSameProjectLinkByNumber($, base, prefix, num + 1);
+      const candidate = findSameProjectLinkByPattern($, base, needleFor(num + 1));
       if (candidate) nextUrl = candidate;
     }
     if (!prevUrl && num > 1) {
-      const candidate = findSameProjectLinkByNumber($, base, prefix, num - 1);
+      const candidate = findSameProjectLinkByPattern($, base, needleFor(num - 1));
       if (candidate) prevUrl = candidate;
     }
   }
@@ -114,14 +131,12 @@ export function findNavLinks(
   return { nextUrl, prevUrl };
 }
 
-function findSameProjectLinkByNumber(
+function findSameProjectLinkByPattern(
   $: CheerioAPI,
   base: URL,
-  projectPrefix: string,
-  chapterNumber: number,
+  needle: RegExp,
 ): string | null {
   let found: string | null = null;
-  const needle = new RegExp(`^/?${escapeRegex(projectPrefix)}/${chapterNumber}-`);
   $("a").each((_, el) => {
     if (found) return;
     const href = $(el).attr("href");
