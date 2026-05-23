@@ -1,5 +1,6 @@
 import { Agent, fetch as undiciFetch } from "undici";
-import { pickAdapter } from "@/lib/adapters";
+import { pickAdapter, pickCustomFetcher } from "@/lib/adapters";
+import type { Chapter } from "@/lib/types";
 import { chunkParagraphs } from "@/lib/chunk";
 import { cacheKey, getCached, setCached, type CachedChapter } from "./cache";
 import { estimateDuration } from "./playlist";
@@ -58,9 +59,19 @@ export async function loadChapter(
     throw new ChapterFetchError("Only http(s) URLs are allowed", 400);
   }
 
-  const html = await fetchChapterHtml(target);
-  const adapter = pickAdapter(target.toString());
-  const chapter = adapter(html, target.toString());
+  let chapter: Chapter;
+  const customFetcher = pickCustomFetcher(target.toString());
+  if (customFetcher) {
+    try {
+      chapter = await customFetcher(target.toString());
+    } catch (err) {
+      throw new ChapterFetchError(`Fetch failed: ${(err as Error).message}`, 502);
+    }
+  } else {
+    const html = await fetchChapterHtml(target);
+    const adapter = pickAdapter(target.toString());
+    chapter = adapter(html, target.toString());
+  }
   if (chapter.paragraphs.length === 0) {
     throw new ChapterFetchError("Could not find chapter content on the page", 422);
   }

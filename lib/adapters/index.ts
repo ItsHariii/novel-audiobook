@@ -1,18 +1,38 @@
 import type { Chapter } from "../types";
 import { parseGeneric } from "./generic";
 import { parseSkyDemonOrder } from "./skydemonorder";
+import { fetchNovtales } from "./novtales";
 
-type Adapter = (html: string, url: string) => Chapter;
+type HtmlAdapter = (html: string, url: string) => Chapter;
+type CustomFetcher = (url: string) => Promise<Chapter>;
 
-const adapters: Record<string, Adapter> = {
+const htmlAdapters: Record<string, HtmlAdapter> = {
   "skydemonorder.com": parseSkyDemonOrder,
 };
 
-export function pickAdapter(url: string): Adapter {
+// Sites whose chapter body is rendered client-side (e.g. Bubble.io SPAs) can't
+// be parsed from raw HTML. They expose JSON APIs that we hit directly instead
+// of fetching the HTML shell.
+const customFetchers: Record<string, CustomFetcher> = {
+  "novtales.com": fetchNovtales,
+};
+
+function hostOf(url: string): string | null {
   try {
-    const host = new URL(url).hostname.replace(/^www\./, "");
-    return adapters[host] ?? parseGeneric;
+    return new URL(url).hostname.replace(/^www\./, "");
   } catch {
-    return parseGeneric;
+    return null;
   }
+}
+
+export function pickAdapter(url: string): HtmlAdapter {
+  const host = hostOf(url);
+  if (!host) return parseGeneric;
+  return htmlAdapters[host] ?? parseGeneric;
+}
+
+export function pickCustomFetcher(url: string): CustomFetcher | null {
+  const host = hostOf(url);
+  if (!host) return null;
+  return customFetchers[host] ?? null;
 }

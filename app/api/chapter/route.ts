@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Agent, fetch as undiciFetch } from "undici";
-import { pickAdapter } from "@/lib/adapters";
+import { pickAdapter, pickCustomFetcher } from "@/lib/adapters";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,6 +29,25 @@ export async function GET(req: NextRequest) {
   }
   if (target.protocol !== "https:" && target.protocol !== "http:") {
     return NextResponse.json({ ok: false, error: "Only http(s) URLs are allowed" }, { status: 400 });
+  }
+
+  const customFetcher = pickCustomFetcher(target.toString());
+  if (customFetcher) {
+    try {
+      const chapter = await customFetcher(target.toString());
+      if (chapter.paragraphs.length === 0) {
+        return NextResponse.json(
+          { ok: false, error: "Could not find chapter content on the page" },
+          { status: 422 },
+        );
+      }
+      return NextResponse.json({ ok: true, chapter });
+    } catch (err) {
+      return NextResponse.json(
+        { ok: false, error: `Fetch failed: ${(err as Error).message}` },
+        { status: 502 },
+      );
+    }
   }
 
   let html: string;
