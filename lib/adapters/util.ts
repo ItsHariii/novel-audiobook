@@ -168,9 +168,9 @@ export function findNavLinks(
   // Whole-string label match. Length-capped to avoid matching the word "next"
   // or "previous" embedded inside chapter titles (e.g. "We Are Not Next To It").
   const NEXT_LABEL =
-    /^(?:next(?:\s+(?:chapter|ep|episode))?(?:\s*[→›»])?|[→›»]\s*next|[→›»])$/i;
+    /^(?:(?:[→›»>]+\s*)?next(?:\s+(?:chapter|ep|episode))?(?:\s*[→›»>]+)?|[→›»>]+)$/i;
   const PREV_LABEL =
-    /^(?:prev(?:ious)?(?:\s+(?:chapter|ep|episode))?(?:\s*[←‹«])?|[←‹«]\s*prev(?:ious)?|[←‹«])$/i;
+    /^(?:(?:[←‹«<]+\s*)?prev(?:ious)?(?:\s+(?:chapter|ep|episode))?(?:\s*[←‹«<]+)?|[←‹«<]+)$/i;
   const isLabel = (s: string, re: RegExp) => {
     const t = s.replace(/\s+/g, " ").trim();
     return t.length > 0 && t.length <= 25 && re.test(t);
