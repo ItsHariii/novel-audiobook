@@ -1,3 +1,5 @@
+import type { ViewMode } from "@/components/player/types";
+
 export function Header(props: {
   showLibraryToggle: boolean;
   onOpenLibrary: () => void;
@@ -8,6 +10,8 @@ export function Header(props: {
   hidden?: boolean;
   theme: "dark" | "light";
   onToggleTheme: () => void;
+  viewMode: ViewMode;
+  onViewMode: (mode: ViewMode) => void;
 }) {
   return (
     <header
@@ -28,6 +32,12 @@ export function Header(props: {
             className="h-10 w-10"
           />
         </div>
+        {props.hasChapter && (
+          <ViewModeToggle
+            value={props.viewMode}
+            onChange={props.onViewMode}
+          />
+        )}
         <div className="flex items-center gap-1">
           {props.hasChapter && (
             <IconButton
@@ -55,6 +65,45 @@ export function Header(props: {
         </div>
       </div>
     </header>
+  );
+}
+
+const MODE_LABELS: Record<ViewMode, string> = {
+  reader: "Reader",
+  rsvp: "RSVP",
+  audio: "Audio",
+};
+
+function ViewModeToggle(props: {
+  value: ViewMode;
+  onChange: (mode: ViewMode) => void;
+}) {
+  const modes: ViewMode[] = ["reader", "rsvp", "audio"];
+  return (
+    <div
+      role="tablist"
+      aria-label="View mode"
+      className="flex items-center rounded-full border border-[var(--color-border)] bg-[var(--color-panel)] p-0.5 text-[11px]"
+    >
+      {modes.map((m) => {
+        const active = props.value === m;
+        return (
+          <button
+            key={m}
+            role="tab"
+            aria-selected={active}
+            onClick={() => props.onChange(m)}
+            className={`h-7 rounded-full px-3 font-medium transition ${
+              active
+                ? "bg-[var(--color-accent)] text-black"
+                : "text-[var(--color-text)]/75 hover:text-[var(--color-text)]"
+            }`}
+          >
+            {MODE_LABELS[m]}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

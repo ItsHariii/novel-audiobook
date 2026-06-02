@@ -1,5 +1,7 @@
 import type { Chapter } from "@/lib/types";
 
+export type ViewMode = "reader" | "rsvp" | "audio";
+
 export interface Chunk {
   index: number;
   text: string;

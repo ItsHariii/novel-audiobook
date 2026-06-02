@@ -8,6 +8,8 @@ import { HeroCard } from "@/components/player/HeroCard";
 import { LoadingSkeleton } from "@/components/player/LoadingSkeleton";
 import { PlayerBar } from "@/components/player/PlayerBar";
 import { ReaderPanel } from "@/components/player/ReaderPanel";
+import { RsvpControls } from "@/components/player/RsvpControls";
+import { RsvpPanel } from "@/components/player/RsvpPanel";
 import { SettingsDrawer } from "@/components/player/SettingsDrawer";
 import { Sidebar } from "@/components/player/Sidebar";
 import type { SleepMode } from "@/components/player/SleepTimerButton";
@@ -16,7 +18,13 @@ import type {
   Chunk,
   HistoryItem,
   LoadedChapter,
+  ViewMode,
 } from "@/components/player/types";
+import {
+  findWordIndexForChunk,
+  tokenizeChunks,
+  type RsvpWord,
+} from "@/lib/rsvp";
 
 const VOICES: Array<{ id: string; label: string }> = [
   { id: "en-US-AvaNeural", label: "Ava (US, female, natural)" },
@@ -37,6 +45,11 @@ const LS_HISTORY = "nab:history";
 const LS_READER_FONT = "nab:readerFont";
 const LS_PLAYER_VISIBLE = "nab:playerVisible";
 const LS_THEME = "nab:theme";
+const LS_VIEW_MODE = "nab:viewMode";
+const LS_WPM = "nab:wpm";
+const LS_RSVP_PREFIX = "nab:rsvp:";
+
+const DEFAULT_WPM = 400;
 
 type Theme = "dark" | "light";
 
@@ -114,6 +127,10 @@ export default function Player() {
   const [sleep, setSleep] = useState<SleepMode>(null);
   const [sleepRemainingMs, setSleepRemainingMs] = useState(0);
   const [theme, setTheme] = useState<Theme>("dark");
+  const [viewMode, setViewMode] = useState<ViewMode>("reader");
+  const [wpm, setWpm] = useState<number>(DEFAULT_WPM);
+  const [rsvpWordIndex, setRsvpWordIndex] = useState<number>(0);
+  const [isRsvpPlaying, setIsRsvpPlaying] = useState<boolean>(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const hlsRef = useRef<HlsLike | null>(null);
@@ -157,6 +174,15 @@ export default function Player() {
       if (!Number.isNaN(n)) setReaderFontSize(n);
     }
     if (savedPlayerVisible === "0") setPlayerBarVisible(false);
+    const savedView = localStorage.getItem(LS_VIEW_MODE);
+    if (savedView === "reader" || savedView === "rsvp" || savedView === "audio") {
+      setViewMode(savedView);
+    }
+    const savedWpm = localStorage.getItem(LS_WPM);
+    if (savedWpm) {
+      const n = parseInt(savedWpm, 10);
+      if (!Number.isNaN(n) && n > 0) setWpm(n);
+    }
     const attr = document.documentElement.getAttribute("data-theme");
     if (attr === "light" || attr === "dark") setTheme(attr);
   }, []);
@@ -183,6 +209,8 @@ export default function Player() {
   useEffect(() => {
     try { localStorage.setItem(LS_PLAYER_VISIBLE, playerBarVisible ? "1" : "0"); } catch {}
   }, [playerBarVisible]);
+  useEffect(() => { try { localStorage.setItem(LS_VIEW_MODE, viewMode); } catch {} }, [viewMode]);
+  useEffect(() => { try { localStorage.setItem(LS_WPM, String(wpm)); } catch {} }, [wpm]);
 
   // Re-apply playback rate when chapter swaps. Safari resets to 1.0 on src change.
   useEffect(() => {
@@ -634,6 +662,122 @@ export default function Player() {
     return () => window.removeEventListener("pointerdown", onPointer);
   }, [headerHidden]);
 
+  const rsvpWords = useMemo<RsvpWord[]>(
+    () => (current ? tokenizeChunks(current.chunks) : []),
+    [current],
+  );
+
+  // Restore RSVP word index when chapter changes.
+  useEffect(() => {
+    if (!current) {
+      setRsvpWordIndex(0);
+      return;
+    }
+    const saved = localStorage.getItem(LS_RSVP_PREFIX + current.chapter.url);
+    if (!saved) {
+      setRsvpWordIndex(0);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(saved);
+      if (typeof parsed?.wordIndex === "number") {
+        setRsvpWordIndex(Math.max(0, parsed.wordIndex));
+        return;
+      }
+    } catch {}
+    setRsvpWordIndex(0);
+  }, [current]);
+
+  // Persist RSVP word index per chapter while in RSVP mode. Refs avoid
+  // re-creating the interval on every word tick.
+  const rsvpWordIndexRef = useRef(rsvpWordIndex);
+  useEffect(() => { rsvpWordIndexRef.current = rsvpWordIndex; }, [rsvpWordIndex]);
+
+  useEffect(() => {
+    if (!current || viewMode !== "rsvp") return;
+    const key = LS_RSVP_PREFIX + current.chapter.url;
+    const save = () => {
+      try {
+        localStorage.setItem(
+          key,
+          JSON.stringify({ wordIndex: rsvpWordIndexRef.current }),
+        );
+      } catch {}
+    };
+    const t = setInterval(save, 3000);
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") save();
+    };
+    const onHide = () => save();
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", onHide);
+    window.addEventListener("beforeunload", onHide);
+    return () => {
+      save();
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", onHide);
+      window.removeEventListener("beforeunload", onHide);
+    };
+  }, [current, viewMode]);
+
+  // Mode-switch side effects: pause audio on enter, sync chunk/word on toggle.
+  const prevViewModeRef = useRef<ViewMode>(viewMode);
+  useEffect(() => {
+    const prev = prevViewModeRef.current;
+    if (prev === viewMode) return;
+    prevViewModeRef.current = viewMode;
+
+    if (viewMode === "rsvp") {
+      const a = audioRef.current;
+      if (a && !a.paused) a.pause();
+      wantPlayRef.current = false;
+      setIsPlaying(false);
+      if (rsvpWords.length > 0 && rsvpWordIndex === 0 && currentChunkIndex > 0) {
+        setRsvpWordIndex(findWordIndexForChunk(rsvpWords, currentChunkIndex));
+      }
+      return;
+    }
+
+    if (prev === "rsvp") {
+      setIsRsvpPlaying(false);
+      if (rsvpWords.length > 0 && current) {
+        const clamped = Math.min(rsvpWordIndex, rsvpWords.length - 1);
+        const word = rsvpWords[clamped];
+        if (word && word.chunkIndex !== currentChunkIndex) {
+          const a = audioRef.current;
+          if (a) a.currentTime = current.cumDurations[word.chunkIndex] ?? 0;
+          setCurrentChunkIndex(word.chunkIndex);
+          setChunkPosition(0);
+          setChunkDuration(current.chunks[word.chunkIndex]?.estDuration ?? 0);
+        }
+      }
+    }
+  }, [viewMode, rsvpWords, rsvpWordIndex, currentChunkIndex, current]);
+
+  const skipRsvpWords = useCallback(
+    (delta: number) => {
+      setRsvpWordIndex((i) => {
+        const max = Math.max(0, rsvpWords.length - 1);
+        return Math.max(0, Math.min(max, i + delta));
+      });
+    },
+    [rsvpWords.length],
+  );
+
+  const seekRsvpWord = useCallback(
+    (idx: number) => {
+      const max = Math.max(0, rsvpWords.length - 1);
+      setRsvpWordIndex(Math.max(0, Math.min(max, idx)));
+    },
+    [rsvpWords.length],
+  );
+
+  const toggleRsvpPlay = useCallback(() => {
+    if (rsvpWords.length === 0) return;
+    setIsRsvpPlaying((v) => !v);
+  }, [rsvpWords.length]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -643,6 +787,28 @@ export default function Player() {
         target?.tagName === "SELECT"
       )
         return;
+      if (viewMode === "rsvp") {
+        if (e.key === " ") {
+          e.preventDefault();
+          toggleRsvpPlay();
+        } else if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          skipRsvpWords(-10);
+        } else if (e.key === "ArrowRight") {
+          e.preventDefault();
+          skipRsvpWords(10);
+        } else if (e.key === "[") {
+          e.preventDefault();
+          goPrevChapter();
+        } else if (e.key === "]") {
+          e.preventDefault();
+          goNextChapter();
+        } else if (e.key === "?") {
+          e.preventDefault();
+          setShortcutsOpen((v) => !v);
+        }
+        return;
+      }
       if (e.key === " ") {
         e.preventDefault();
         void togglePlay();
@@ -665,7 +831,15 @@ export default function Player() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [togglePlay, seekSeconds, goPrevChapter, goNextChapter]);
+  }, [
+    togglePlay,
+    seekSeconds,
+    goPrevChapter,
+    goNextChapter,
+    viewMode,
+    toggleRsvpPlay,
+    skipRsvpWords,
+  ]);
 
   // Cleanup hls.js instance on unmount.
   useEffect(() => {
@@ -701,6 +875,8 @@ export default function Player() {
         hidden={headerHidden}
         theme={theme}
         onToggleTheme={toggleTheme}
+        viewMode={viewMode}
+        onViewMode={setViewMode}
       />
 
       {error && <Toast message={error} onClose={() => setError(null)} />}
@@ -732,33 +908,44 @@ export default function Player() {
           {!chapterLoading && current && (
             <>
               <div className="min-h-0 flex-1">
-                <ReaderPanel
-                  chunks={current.chunks}
-                  currentChunkIndex={currentChunkIndex}
-                  onPickChunk={onPickChunk}
-                  readerFontSize={readerFontSize}
-                  readingMode={!playerBarVisible}
-                  onUserScroll={() => setHeaderHidden(true)}
-                  canReachEnd={!!current.chapter.nextUrl}
-                  onReachedEnd={() => {
-                    const nextUrl = current.chapter.nextUrl;
-                    if (!nextUrl) return;
-                    void loadChapterFromUrl(nextUrl, isPlaying);
-                  }}
-                  header={
-                    <HeroCard
-                      title={current.chapter.bookTitle || current.chapter.title}
-                      source={current.chapter.source}
-                      chapterLabel={current.chapter.chapterLabel}
-                      currentPart={currentChunkIndex + 1}
-                      totalParts={current.chunks.length}
-                      canPrevChapter={!!current.chapter.prevUrl}
-                      canNextChapter={!!current.chapter.nextUrl}
-                      onPrevChapter={goPrevChapter}
-                      onNextChapter={goNextChapter}
-                    />
-                  }
-                />
+                {viewMode === "rsvp" ? (
+                  <RsvpPanel
+                    words={rsvpWords}
+                    index={Math.min(rsvpWordIndex, Math.max(0, rsvpWords.length - 1))}
+                    wpm={wpm}
+                    isPlaying={isRsvpPlaying}
+                    onIndexChange={setRsvpWordIndex}
+                    onComplete={() => setIsRsvpPlaying(false)}
+                  />
+                ) : (
+                  <ReaderPanel
+                    chunks={current.chunks}
+                    currentChunkIndex={currentChunkIndex}
+                    onPickChunk={onPickChunk}
+                    readerFontSize={readerFontSize}
+                    readingMode={!playerBarVisible}
+                    onUserScroll={() => setHeaderHidden(true)}
+                    canReachEnd={!!current.chapter.nextUrl}
+                    onReachedEnd={() => {
+                      const nextUrl = current.chapter.nextUrl;
+                      if (!nextUrl) return;
+                      void loadChapterFromUrl(nextUrl, isPlaying);
+                    }}
+                    header={
+                      <HeroCard
+                        title={current.chapter.bookTitle || current.chapter.title}
+                        source={current.chapter.source}
+                        chapterLabel={current.chapter.chapterLabel}
+                        currentPart={currentChunkIndex + 1}
+                        totalParts={current.chunks.length}
+                        canPrevChapter={!!current.chapter.prevUrl}
+                        canNextChapter={!!current.chapter.nextUrl}
+                        onPrevChapter={goPrevChapter}
+                        onNextChapter={goNextChapter}
+                      />
+                    }
+                  />
+                )}
               </div>
               {shortcutsOpen && (
                 <div className="grid shrink-0 gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)] p-3 text-xs text-[var(--color-muted)]">
@@ -821,7 +1008,20 @@ export default function Player() {
         playsInline
       />
 
-      {playerBarVisible && (
+      {playerBarVisible && viewMode === "rsvp" && (
+        <RsvpControls
+          hasChapter={!!current}
+          isPlaying={isRsvpPlaying}
+          wordIndex={rsvpWordIndex}
+          totalWords={rsvpWords.length}
+          wpm={wpm}
+          onTogglePlay={toggleRsvpPlay}
+          onSkipWords={skipRsvpWords}
+          onSeekWord={seekRsvpWord}
+          onWpm={setWpm}
+        />
+      )}
+      {playerBarVisible && viewMode !== "rsvp" && (
         <PlayerBar
           hasChapter={!!current}
           isPlaying={isPlaying}
