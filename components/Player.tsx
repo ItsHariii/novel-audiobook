@@ -916,6 +916,7 @@ export default function Player() {
                     isPlaying={isRsvpPlaying}
                     onIndexChange={setRsvpWordIndex}
                     onComplete={() => setIsRsvpPlaying(false)}
+                    onTogglePlay={toggleRsvpPlay}
                   />
                 ) : (
                   <ReaderPanel

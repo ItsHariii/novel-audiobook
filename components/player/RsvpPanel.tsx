@@ -10,6 +10,7 @@ export function RsvpPanel(props: {
   isPlaying: boolean;
   onIndexChange: (next: number) => void;
   onComplete: () => void;
+  onTogglePlay: () => void;
 }) {
   const indexRef = useRef(props.index);
   useEffect(() => {
@@ -51,11 +52,16 @@ export function RsvpPanel(props: {
   const wordNo = total === 0 ? 0 : props.index + 1;
 
   return (
-    <div className="relative grid h-full place-items-center rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] px-6">
-      <div className="absolute left-0 right-0 top-6 mx-auto h-px w-[min(60%,520px)] bg-[var(--color-border)]" />
-      <div className="absolute bottom-6 left-0 right-0 mx-auto h-px w-[min(60%,520px)] bg-[var(--color-border)]" />
+    <button
+      type="button"
+      onClick={props.onTogglePlay}
+      aria-label={props.isPlaying ? "Pause" : "Play"}
+      className="relative grid h-full w-full cursor-pointer place-items-center rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] px-6 text-left focus:outline-none"
+    >
+      <div className="pointer-events-none absolute left-0 right-0 top-6 mx-auto h-px w-[min(60%,520px)] bg-[var(--color-border)]" />
+      <div className="pointer-events-none absolute bottom-6 left-0 right-0 mx-auto h-px w-[min(60%,520px)] bg-[var(--color-border)]" />
 
-      <div className="flex flex-col items-center gap-6">
+      <div className="pointer-events-none flex flex-col items-center gap-6">
         <div className="text-[10.5px] font-medium uppercase tracking-[0.22em] text-[var(--color-muted)]">
           {total > 0
             ? `Word ${wordNo.toLocaleString()} / ${total.toLocaleString()}`
@@ -71,9 +77,9 @@ export function RsvpPanel(props: {
           <span className="text-[var(--color-text)]/70">{after}</span>
         </div>
         <div className="text-xs text-[var(--color-muted)]">
-          {props.isPlaying ? `${props.wpm} wpm` : "Paused"}
+          {props.isPlaying ? `${props.wpm} wpm` : "Tap to play"}
         </div>
       </div>
-    </div>
+    </button>
   );
 }
