@@ -92,6 +92,23 @@ function buildLoadedChapter(meta: ChapterMetaResponse): LoadedChapter {
   };
 }
 
+interface ChapterTiming {
+  durations: number[];
+  cumDurations: number[];
+  totalDuration: number;
+}
+
+// Chunk timeline using real (measured) durations where the server has them,
+// falling back to the chars-per-second estimate. Estimates alone drift by
+// minutes over a chapter, which made the chained next chapter start before
+// we thought the current one had ended.
+function buildTiming(chunks: Chunk[], real: Array<number | null> | null): ChapterTiming {
+  const durations = chunks.map((c, i) => real?.[i] ?? c.estDuration);
+  const cumDurations: number[] = [0];
+  for (const d of durations) cumDurations.push(cumDurations[cumDurations.length - 1] + d);
+  return { durations, cumDurations, totalDuration: cumDurations[cumDurations.length - 1] };
+}
+
 function findChunkAtTime(cumDurations: number[], t: number): number {
   if (cumDurations.length <= 1) return 0;
   let lo = 0;
@@ -108,6 +125,21 @@ export default function Player() {
   const [inputUrl, setInputUrl] = useState("");
   const [current, setCurrent] = useState<LoadedChapter | null>(null);
   const [nextPrefetch, setNextPrefetch] = useState<LoadedChapter | null>(null);
+  // Real segment durations for `current`, keyed by playlist URL (url + voice).
+  const [realDurations, setRealDurations] = useState<{
+    key: string;
+    durations: Array<number | null>;
+  } | null>(null);
+  const timing = useMemo(
+    () =>
+      current
+        ? buildTiming(
+            current.chunks,
+            realDurations?.key === current.playlistUrl ? realDurations.durations : null,
+          )
+        : null,
+    [current, realDurations],
+  );
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -457,11 +489,48 @@ export default function Player() {
         const idx = Math.max(0, Math.min(current.chunks.length - 1, pos.chunk));
         time = current.cumDurations[idx] + (typeof pos.offset === "number" ? pos.offset : 0);
       }
-      if (time > 0 && time < current.totalDuration - 1) {
+      // Estimates can undershoot the real length a little, so allow some slack.
+      if (time > 0 && time < current.totalDuration * 1.15) {
         pendingRestoreRef.current = { chapter: current.chapter.url, time };
       }
     } catch {}
   }, [current]);
+
+  // Poll the server for real segment durations while playing. The player
+  // buffers ahead, so the last segment's true length is known well before the
+  // chapter boundary, letting the crossover fire exactly when the chained next
+  // chapter starts instead of minutes late (which replayed its opening).
+  useEffect(() => {
+    if (!current || !isPlaying) return;
+    const key = current.playlistUrl;
+    const url = `/api/chapter-durations?url=${encodeURIComponent(current.chapter.url)}&voice=${encodeURIComponent(current.voice)}`;
+    const ac = new AbortController();
+    let done = false;
+    const poll = async () => {
+      if (done) return;
+      try {
+        const res = await fetch(url, { cache: "no-store", signal: ac.signal });
+        if (!res.ok) return;
+        const data = (await res.json()) as { ok: boolean; durations?: Array<number | null> };
+        if (!data.ok || !data.durations) return;
+        const durations = data.durations;
+        done = durations.every((d) => d !== null);
+        setRealDurations((prev) =>
+          prev?.key === key &&
+          prev.durations.length === durations.length &&
+          prev.durations.every((d, i) => d === durations[i])
+            ? prev
+            : { key, durations },
+        );
+      } catch {}
+    };
+    void poll();
+    const id = window.setInterval(poll, 10_000);
+    return () => {
+      ac.abort();
+      window.clearInterval(id);
+    };
+  }, [current, isPlaying]);
 
   // Auto-advance to next chapter on end.
   const onEnded = useCallback(() => {
@@ -478,8 +547,9 @@ export default function Player() {
     // before `timeupdate` had a chance to swap state. In that case the
     // prefetched next chapter is the chapter we just finished — advance to
     // *its* nextUrl instead of replaying it.
-    if (a && nextPrefetch && a.currentTime > current.totalDuration + 0.25) {
-      void crossoverToNext(nextPrefetch, a.currentTime - current.totalDuration);
+    const total = timing?.totalDuration ?? current.totalDuration;
+    if (a && nextPrefetch && a.currentTime > total + 0.25) {
+      void crossoverToNext(nextPrefetch, a.currentTime - total);
       return;
     }
     if (current.chapter.nextUrl) {
@@ -488,7 +558,7 @@ export default function Player() {
       return;
     }
     setIsPlaying(false);
-  }, [current, sleep, loadChapterFromUrl, nextPrefetch, crossoverToNext]);
+  }, [current, timing, sleep, loadChapterFromUrl, nextPrefetch, crossoverToNext]);
 
   const togglePlay = useCallback(async () => {
     const a = audioRef.current;
@@ -515,20 +585,20 @@ export default function Player() {
   const seekSeconds = useCallback(
     (delta: number) => {
       const a = audioRef.current;
-      if (!a || !current) return;
+      if (!a || !timing) return;
       const newT = a.currentTime + delta;
-      seekAbsolute(Math.min(Math.max(0, newT), current.totalDuration - 0.1));
+      seekAbsolute(Math.min(Math.max(0, newT), timing.totalDuration - 0.1));
     },
-    [current, seekAbsolute],
+    [timing, seekAbsolute],
   );
 
   const onPickChunk = useCallback(
     (i: number) => {
-      if (!current) return;
+      if (!current || !timing) return;
       const idx = Math.max(0, Math.min(current.chunks.length - 1, i));
-      seekAbsolute(current.cumDurations[idx]);
+      seekAbsolute(timing.cumDurations[idx]);
     },
-    [current, seekAbsolute],
+    [current, timing, seekAbsolute],
   );
 
   const goPrevChapter = useCallback(() => {
@@ -617,21 +687,21 @@ export default function Player() {
 
   const onTimeUpdate = useCallback(() => {
     const a = audioRef.current;
-    if (!a || !current) return;
+    if (!a || !current || !timing) return;
     if (transitioningRef.current) return;
     const t = a.currentTime;
     // Chapter boundary: the chained HLS playlist has played past the end of
     // the current chapter (typical when the PWA was backgrounded). Swap to
     // the prefetched next chapter, seeking to the overshoot offset.
-    if (t > current.totalDuration + 0.25 && nextPrefetch) {
-      void crossoverToNext(nextPrefetch, t - current.totalDuration);
+    if (t > timing.totalDuration + 0.25 && nextPrefetch) {
+      void crossoverToNext(nextPrefetch, t - timing.totalDuration);
       return;
     }
-    setChunkPosition(t - current.cumDurations[currentChunkIndex]);
-    const idx = findChunkAtTime(current.cumDurations, t);
+    const idx = findChunkAtTime(timing.cumDurations, t);
+    setChunkPosition(t - timing.cumDurations[idx]);
+    setChunkDuration(timing.durations[idx] ?? 0);
     if (idx !== currentChunkIndex) {
       setCurrentChunkIndex(idx);
-      setChunkDuration(current.chunks[idx]?.estDuration ?? 0);
       // Sleep "chunk" mode: pause as soon as the chunk we armed on finishes.
       if (sleep?.kind === "chunk" && sleepChunkStartRef.current !== null) {
         if (idx > sleepChunkStartRef.current) {
@@ -642,7 +712,7 @@ export default function Player() {
         }
       }
     }
-  }, [current, currentChunkIndex, sleep, nextPrefetch, crossoverToNext]);
+  }, [current, timing, currentChunkIndex, sleep, nextPrefetch, crossoverToNext]);
 
   // Double-tap brings header back when hidden.
   useEffect(() => {
@@ -746,14 +816,14 @@ export default function Player() {
         const word = rsvpWords[clamped];
         if (word && word.chunkIndex !== currentChunkIndex) {
           const a = audioRef.current;
-          if (a) a.currentTime = current.cumDurations[word.chunkIndex] ?? 0;
+          if (a) a.currentTime = timing?.cumDurations[word.chunkIndex] ?? 0;
           setCurrentChunkIndex(word.chunkIndex);
           setChunkPosition(0);
-          setChunkDuration(current.chunks[word.chunkIndex]?.estDuration ?? 0);
+          setChunkDuration(timing?.durations[word.chunkIndex] ?? 0);
         }
       }
     }
-  }, [viewMode, rsvpWords, rsvpWordIndex, currentChunkIndex, current]);
+  }, [viewMode, rsvpWords, rsvpWordIndex, currentChunkIndex, current, timing]);
 
   const skipRsvpWords = useCallback(
     (delta: number) => {
@@ -847,10 +917,10 @@ export default function Player() {
   }, [detachHls]);
 
   const progressPercent = useMemo(() => {
-    if (!current || current.totalDuration <= 0) return 0;
+    if (!timing || timing.totalDuration <= 0) return 0;
     const a = audioRef.current;
-    const t = a?.currentTime ?? current.cumDurations[currentChunkIndex] + chunkPosition;
-    return Math.min(100, (t / current.totalDuration) * 100);
+    const t = a?.currentTime ?? timing.cumDurations[currentChunkIndex] + chunkPosition;
+    return Math.min(100, (t / timing.totalDuration) * 100);
   }, [current, currentChunkIndex, chunkPosition]);
 
   const onSubmit = (e: React.FormEvent) => {
@@ -1031,7 +1101,7 @@ export default function Player() {
           duration={chunkDuration || (currentChunk?.estDuration ?? 0)}
           onSeek={(next) => {
             if (!current) return;
-            seekAbsolute(current.cumDurations[currentChunkIndex] + next);
+            seekAbsolute((timing?.cumDurations[currentChunkIndex] ?? 0) + next);
           }}
           onTogglePlay={togglePlay}
           onSkipBack={() => seekSeconds(-15)}

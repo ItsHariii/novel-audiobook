@@ -1,15 +1,30 @@
 import type { CachedSegment } from "./cache";
 
-// Approx characters spoken per second at 1x rate for Edge neural voices.
-// 14 c/s is a conservative midpoint across the voices we ship.
-const CHARS_PER_SECOND = 14;
+// Characters spoken per second at 1x rate, measured per Edge neural voice.
+// Only a fallback: real durations replace these once a segment is synthesized.
+const CHARS_PER_SECOND: Record<string, number> = {
+  "en-US-AvaNeural": 16,
+  "en-US-AndrewNeural": 16.5,
+  "en-US-EmmaNeural": 16.1,
+  "en-US-BrianNeural": 15.6,
+  "en-GB-SoniaNeural": 15.4,
+  "en-GB-RyanNeural": 14.1,
+  "en-US-GuyNeural": 14.2,
+  "en-US-JennyNeural": 14.1,
+};
+const DEFAULT_CHARS_PER_SECOND = 15;
 const MIN_SEGMENT_SECONDS = 2;
 
-export function estimateDuration(text: string): number {
+export function estimateDuration(text: string, voice?: string): number {
   const trimmed = text.trim();
   if (!trimmed) return MIN_SEGMENT_SECONDS;
-  const est = trimmed.length / CHARS_PER_SECOND;
+  const rate = (voice && CHARS_PER_SECOND[voice]) || DEFAULT_CHARS_PER_SECOND;
+  const est = trimmed.length / rate;
   return Math.max(MIN_SEGMENT_SECONDS, Math.round(est * 10) / 10);
+}
+
+export function segmentDuration(segment: CachedSegment): number {
+  return segment.realDuration ?? segment.estDuration;
 }
 
 export interface PlaylistChapter {
@@ -23,7 +38,7 @@ export function buildPlaylist(chapters: PlaylistChapter[], voice: string): strin
   // them (used to keep audio flowing when the PWA is backgrounded and JS
   // can't load the next chapter on `ended`).
   const maxSegSec = chapters.reduce((max, ch) => {
-    for (const s of ch.segments) if (s.estDuration > max) max = s.estDuration;
+    for (const s of ch.segments) max = Math.max(max, segmentDuration(s));
     return max;
   }, 0);
   const lines: string[] = [
@@ -38,7 +53,7 @@ export function buildPlaylist(chapters: PlaylistChapter[], voice: string): strin
     if (idx > 0) lines.push("#EXT-X-DISCONTINUITY");
     const u = encodeURIComponent(ch.url);
     ch.segments.forEach((segment, i) => {
-      lines.push(`#EXTINF:${segment.estDuration.toFixed(3)},`);
+      lines.push(`#EXTINF:${segmentDuration(segment).toFixed(3)},`);
       lines.push(`/api/tts-segment?url=${u}&i=${i}&voice=${v}`);
     });
   });

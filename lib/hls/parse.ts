@@ -78,7 +78,7 @@ export async function loadChapter(
   const chunks = chunkParagraphs(chapter.paragraphs);
   const segments = chunks.map((text) => ({
     text,
-    estDuration: estimateDuration(text),
+    estDuration: estimateDuration(text, voice),
   }));
   const cached = setCached(key, { chapter, voice, segments });
   return { key, cached };

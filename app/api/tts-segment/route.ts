@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MsEdgeTTS, OUTPUT_FORMAT } from "msedge-tts";
 import { ChapterFetchError, loadChapter } from "@/lib/hls/parse";
+import type { CachedSegment } from "@/lib/hls/cache";
 import { normalizeVoice } from "@/lib/tts/voices";
 
 export const runtime = "nodejs";
@@ -8,6 +9,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 const MAX_TEXT_LENGTH = 3000;
+// AUDIO_24KHZ_48KBITRATE_MONO_MP3 is constant bitrate: 48 kbit/s = 6000 B/s.
+const BYTES_PER_SECOND = 6000;
 
 export async function GET(req: NextRequest) {
   const url = req.nextUrl.searchParams.get("url");
@@ -25,9 +28,10 @@ export async function GET(req: NextRequest) {
   const voice = normalizeVoice(req.nextUrl.searchParams.get("voice"));
 
   let text: string;
+  let segment: CachedSegment | undefined;
   try {
     const { cached } = await loadChapter(url, voice);
-    const segment = cached.segments[i];
+    segment = cached.segments[i];
     if (!segment) {
       return NextResponse.json(
         { ok: false, error: `Segment ${i} out of range` },
@@ -70,12 +74,17 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  let bytes = 0;
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       audioStream.on("data", (chunk: Buffer) => {
+        bytes += chunk.length;
         controller.enqueue(new Uint8Array(chunk));
       });
       audioStream.on("end", () => {
+        // Record the true length so playlists and the client's chunk timeline
+        // stop relying on the chars-per-second estimate for this segment.
+        if (segment && bytes > 0) segment.realDuration = bytes / BYTES_PER_SECOND;
         controller.close();
       });
       audioStream.on("close", () => {
