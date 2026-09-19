@@ -57,7 +57,10 @@ URL with localhost: Supabase cannot reach your laptop's loopback interface.
    library imports and **Continue** restores the saved position.
 2. Sign in on a second device. Confirm the latest synced position appears.
 3. Start one chapter. A cold chapter shows **Preparing audio** while its chunks
-   are generated. Confirm upcoming chapters appear as ready in session status.
+   are generated, but the chapter text should already be readable. If generation
+   fails, the text stays visible and **Retry audio** does not clear your reading
+   position. Confirm **Audio ready** appears and upcoming chapters appear as ready
+   in session status.
 4. Lock an actual iPhone with Tome installed. Listen across at least five chapters
    at 1× and 2.5×; verify no repeats, skips, or chapter-boundary source reloads.
 5. Test pause/resume, reader scroll restoration, RSVP, changing voice, manual
@@ -91,13 +94,24 @@ new pipeline for unattended listening.
 - Signing out closes this browser's active audio session. Switching chapters
   closes the previous session; closing the browser relies on session expiry.
 - `AUDIO_CACHE_MAX_BYTES` defaults to 750,000,000 bytes. Cleanup removes the
-  least recently used unpinned generated audio when space is needed. Active
-  sessions protect their assets; a full pinned cache pauses preparation instead
-  of discarding audio in use. Library/progress records are never evicted.
+  text/audio assets no active session needs after a two-minute grace period,
+  even when the cache is not full. Under storage pressure, unpinned assets can
+  be removed sooner. Active sessions protect their assets; a full pinned cache
+  pauses preparation instead of discarding audio in use. Earlier audio within
+  the same continuous session remains available until that session closes or
+  expires, so native HLS can keep using its growing playlist.
+- History imports and progress records contain chapter URLs, titles, and stopping
+  points, never chapter bodies or audio. Importing history does not fetch or
+  synthesize those earlier chapters. Only an opened chapter and its two successors
+  are prepared. Library/progress records are never evicted by audio cleanup.
 - Free-tier capacity is not unlimited. Monitor Supabase Storage/egress and Vercel
   function usage. There are no offline downloads or whole-book generation jobs.
 - Microsoft Edge TTS remains an external dependency. Outages and network loss
   can still interrupt listening; initial uncached preparation is not instant.
+
+If upgrading from the initial Supabase version, redeploy the app and rerun
+`supabase/schedule.sql` (safe to rerun) so idle cleanup also runs after sessions
+close or expire. Do not rerun the original table-creation migration.
 
 ## Diagnostics and local tests
 

@@ -72,5 +72,38 @@ test("database migration enforces ownership, revisions, imports and job leases",
       delete from public.playback_sessions where id='66666666-6666-6666-6666-666666666666';
     `);
     assert.equal((await claim())?.id, 'shared-job', "Closing one device must not cancel another device's preparation");
+    // Exercise the actual scheduler SQL with local no-network extension stubs.
+    await db.exec(`reset role;
+      update public.audio_jobs set state = 'done';
+      delete from public.audio_gc;
+      create schema cron; create schema net; create schema vault;
+      create table net.calls(url text);
+      create table vault.decrypted_secrets(name text, decrypted_secret text);
+      insert into vault.decrypted_secrets values
+        ('tome_worker_url','https://example.test/api/audio-worker'), ('tome_worker_secret','test-secret');
+      create function cron.schedule(text,text,text) returns bigint language sql as $$select 1::bigint$$;
+      create function net.http_post(url text, headers jsonb, body jsonb, timeout_milliseconds integer)
+        returns bigint language plpgsql as $$begin insert into net.calls values (url); return 1; end$$;
+    `);
+    const scheduler = (await readFile(new URL("../supabase/schedule.sql", import.meta.url), "utf8"))
+      .replace(/^create extension[^\n]+\n/gm, "");
+    await db.exec(scheduler);
+    await db.exec(scheduler); // Safe upgrade: replaces the function and named jobs.
+    const dispatches = async () => {
+      await db.exec("truncate net.calls; select public.dispatch_audio_jobs()");
+      return (await db.query("select * from net.calls")).rows.length;
+    };
+    assert.equal(await dispatches(), 0, "Idle active sessions need no worker calls");
+    await db.exec(`insert into public.audio_assets(id,user_id,chapter,voice,chunks)
+      values ('orphan','11111111-1111-1111-1111-111111111111','{}','voice','[]');`);
+    assert.equal(await dispatches(), 0, "New assets get time to attach before cleanup");
+    await db.exec("update public.audio_assets set last_used_at = now() - interval '3 minutes' where id='orphan'");
+    assert.equal(await dispatches(), 2, "Abandoned text/audio wakes cleanup even below the storage limit");
+    await db.exec("select public.retire_audio_asset(id,generation) from public.audio_assets where id='orphan'; delete from public.audio_gc");
+    await db.exec("update public.playback_sessions set expires_at = now() - interval '1 minute'");
+    assert.equal(await dispatches(), 2, "Expired sessions wake cleanup without queued audio jobs");
+    await db.exec("delete from public.playback_sessions where expires_at <= now(); select public.retire_audio_asset(id,generation) from public.audio_assets");
+    assert.equal((await db.query("select * from public.audio_assets")).rows.length, 0);
+    assert.equal((await db.query("select * from public.chapter_progress")).rows.length, 1, "Audio cleanup preserves stopping points");
   } finally { await db.close(); }
 });

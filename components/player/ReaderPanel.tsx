@@ -7,6 +7,7 @@ import type { Chunk } from "@/components/player/types";
 const OVERSCROLL_THRESHOLD = 160;
 
 export function ReaderPanel(props: {
+  chapterKey: string;
   chunks: Chunk[];
   currentChunkIndex: number;
   onPickChunk: (i: number) => void;
@@ -14,12 +15,14 @@ export function ReaderPanel(props: {
   header?: ReactNode;
   onUserScroll?: () => void;
   readingMode?: boolean;
+  followAudio?: boolean;
   canReachEnd?: boolean;
   onReachedEnd?: () => void;
   restorePosition?: { chunk: number; offset: number };
   onPosition?: (position: { chunk: number; offset: number }) => void;
 }) {
   const {
+    chapterKey,
     chunks,
     currentChunkIndex,
     onPickChunk,
@@ -27,6 +30,7 @@ export function ReaderPanel(props: {
     header,
     onUserScroll,
     readingMode = false,
+    followAudio = true,
     canReachEnd = false,
     onReachedEnd,
   } = props;
@@ -64,15 +68,17 @@ export function ReaderPanel(props: {
     return () => cancelAnimationFrame(frame);
   }, [props.restorePosition, readingMode]);
 
-  // Track whether `chunks` just changed (new chapter loaded). When it has, we
+  // Audio readiness replaces chunk durations, not the chapter. Only a new URL
+  // should reset reading position while someone is waiting for audio.
+  // Track whether the chapter changed. When it has, we
   // jump to the very top of the scroller so the reader starts at the chapter
   // header instead of centering on the first paragraph.
-  const prevChunksRef = useRef(chunks);
+  const prevChapterRef = useRef(chapterKey);
   useEffect(() => {
-    const chunksChanged = prevChunksRef.current !== chunks;
-    prevChunksRef.current = chunks;
+    const chapterChanged = prevChapterRef.current !== chapterKey;
+    prevChapterRef.current = chapterKey;
     const container = scrollRef.current;
-    if (chunksChanged) {
+    if (chapterChanged) {
       if (scrollRafRef.current !== null) {
         cancelAnimationFrame(scrollRafRef.current);
         scrollRafRef.current = null;
@@ -81,7 +87,7 @@ export function ReaderPanel(props: {
       return;
     }
     // In reading mode the user owns scroll position; only scroll on explicit click.
-    if (readingMode) return;
+    if (readingMode || !followAudio) return;
     // Debounce via rAF so rapid chunk advances (ChunkDots clicking, high speed)
     // don't stack overlapping smooth scrolls.
     if (scrollRafRef.current !== null) cancelAnimationFrame(scrollRafRef.current);
@@ -97,7 +103,7 @@ export function ReaderPanel(props: {
         scrollRafRef.current = null;
       }
     };
-  }, [currentChunkIndex, chunks, reducedMotion, readingMode]);
+  }, [currentChunkIndex, chapterKey, reducedMotion, readingMode, followAudio]);
 
   // Fire `onUserScroll` only on user-initiated scroll gestures (wheel or
   // touchmove). Skips programmatic scrollIntoView above.
@@ -119,7 +125,7 @@ export function ReaderPanel(props: {
     overscrollRef.current = 0;
     setOverscroll(0);
     committedRef.current = false;
-  }, [chunks]);
+  }, [chapterKey]);
 
   // Pull-past-the-end gesture: once the reader is scrolled to the bottom,
   // accumulate wheel delta / touch drag and load the next chapter once a
@@ -204,7 +210,7 @@ export function ReaderPanel(props: {
       ref={scrollRef}
       onScroll={() => {
         const container = scrollRef.current;
-        if (!container || !readingMode || !props.onPosition) return;
+        if (!container || (!readingMode && followAudio) || !props.onPosition) return;
         const top = container.getBoundingClientRect().top;
         const index = refs.current.findIndex((node) => node && node.getBoundingClientRect().bottom > top);
         const node = refs.current[index];

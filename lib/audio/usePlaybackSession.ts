@@ -38,6 +38,7 @@ export function usePlaybackSession() {
     sessionRef.current = null;
     setSession(null);
     setPreparing(false);
+    setError(null);
     if (previous) await authorizedFetch(`/api/playback-sessions/${previous.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "close" }) }).catch(() => {});
     return generation;
   }, []);
@@ -66,6 +67,9 @@ export function usePlaybackSession() {
         });
       }
       throw new DOMException("Cancelled", "AbortError");
+    } catch (error) {
+      if (generation === generationRef.current && !signal.aborted) setError(error instanceof Error ? error.message : "Could not prepare audio");
+      throw error;
     } finally { if (generation === generationRef.current) setPreparing(false); }
   }, [close, refresh]);
 

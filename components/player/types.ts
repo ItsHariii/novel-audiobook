@@ -9,6 +9,7 @@ export interface Chunk {
 }
 
 export interface LoadedChapter {
+  audioPending?: boolean;
   sessionId?: string;
   startOffset?: number;
   chapter: Chapter;

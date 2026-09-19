@@ -8,7 +8,7 @@ import type { ChapterProgress, ProgressRecord } from "../lib/library/types";
 const voice = "en-US-AvaNeural";
 const user = { id: "11111111-1111-1111-1111-111111111111", email: "reader@example.com", aud: "authenticated", role: "authenticated", app_metadata: { provider: "email", providers: ["email"] }, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" };
 
-async function mockLibrary(page: Page) {
+async function mockLibrary(page: Page, options: { audio?: "ready" | "pending" | "failed"; longText?: boolean } = {}) {
   // Deterministic locally generated audio: no TTS or real Supabase credentials.
   const mp3 = execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=12", "-ar", "24000", "-ac", "1", "-b:a", "48k", "-f", "mp3", "pipe:1"]);
   const parts = packMp3(mp3);
@@ -20,6 +20,12 @@ async function mockLibrary(page: Page) {
     audio_chunks: [{ chunk_index: 0, duration, bytes: mp3.length, parts: parts.map((p, i) => ({ path: `${i}.mp3`, duration: p.duration })) }],
   } satisfies AudioAsset }));
   const session: PlaybackSession = { id: "33333333-3333-3333-3333-333333333333", playlistUrl: "/api/playback-sessions/33333333-3333-3333-3333-333333333333/manifest?token=test", voice, chapters: readyChapters(rows), preparing: false, terminal: true, error: null };
+  if (options.longText) {
+    const text = "A quiet room, a shelf of books, and the next chapter. ".repeat(250);
+    for (const row of rows) { row.asset.chapter.paragraphs = [text]; row.asset.chunks = [text]; }
+    session.chapters = readyChapters(rows);
+  }
+  let audioState = options.audio ?? "ready";
   const p: ChapterProgress = { chapterUrl: rows[0].asset.chapter.url, bookKey: "https://example.com/novel", title: "The Quiet Library", bookTitle: "The Quiet Library", chapterLabel: "Chapter 1", source: "example.com", mode: "audio", audioTime: 2, voice, readerChunk: 0, readerOffset: 0, wordIndex: 0 };
   const records = new Map<string, ProgressRecord>([[p.chapterUrl, { chapter_url: p.chapterUrl, book_key: p.bookKey, payload: p, revision: 1, updated_at: new Date().toISOString() }]]);
   const saved: ChapterProgress[] = [];
@@ -51,9 +57,17 @@ async function mockLibrary(page: Page) {
     }
     if (url.pathname.endsWith("/manifest")) return route.fulfill({ contentType: "application/vnd.apple.mpegurl", body: eventPlaylist(session.chapters, rows, session.id, "test", true, Number(url.searchParams.get("stop") || Infinity)) });
     if (route.request().method() === "POST") sourceCreates++;
-    return route.fulfill({ json: route.request().method() === "PATCH" ? { ok: true } : session });
+    return route.fulfill({ json: route.request().method() === "PATCH" ? { ok: true } : audioState === "ready" ? session : {
+      ...session, chapters: [], preparing: true, terminal: false,
+      error: audioState === "failed" ? "Audio preparation failed. Use Retry audio to try again." : null,
+    } });
   });
-  return { session, saved, sourceCreates: () => sourceCreates };
+  await page.route("**/api/chapter-meta?**", async (route) => {
+    const url = new URL(route.request().url()).searchParams.get("url");
+    const chapter = session.chapters.find((c) => c.chapter.url === url) ?? session.chapters[0];
+    return route.fulfill({ json: { ok: true, key: "test", voice, chapter: chapter.chapter, chunks: chapter.chunks.map((c) => ({ ...c, estDuration: 20 })) } });
+  });
+  return { session, saved, sourceCreates: () => sourceCreates, setAudio: (state: typeof audioState) => { audioState = state; } };
 }
 
 async function signIn(page: Page) {
@@ -104,4 +118,44 @@ test("account controls fit the mobile library", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: "test-results/mobile-library.png", fullPage: true });
+});
+
+test("text remains readable through audio preparation, failure and retry", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  const mock = await mockLibrary(page, { audio: "pending", longText: true });
+  await page.goto("/");
+  await signIn(page);
+  await expect(page.locator("main").getByText("Chapter 1", { exact: true })).toBeVisible();
+  await expect(page.getByText("Preparing audio · you can read while you wait.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Play", exact: true })).toBeDisabled();
+  expect(await page.locator("audio").getAttribute("src")).toBeNull();
+  const reader = page.locator("main .overflow-y-auto");
+  await reader.evaluate((el) => { el.scrollTop = 650; });
+  await expect.poll(() => reader.evaluate((el) => el.scrollTop)).toBeGreaterThan(600);
+  mock.setAudio("failed");
+  await expect(page.getByRole("button", { name: "Retry audio" })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText(/You can keep reading/)).toBeVisible();
+  await expect.poll(() => reader.evaluate((el) => el.scrollTop)).toBeGreaterThan(600);
+  // Saving reader progress while audio is unavailable must not reset audio time.
+  await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+  await expect.poll(() => mock.saved.length).toBeGreaterThan(0);
+  expect(mock.saved.at(-1)?.audioTime).toBe(2);
+  expect(mock.saved.at(-1)?.readerOffset).toBeGreaterThan(0);
+  mock.setAudio("pending");
+  await page.getByRole("button", { name: "Retry audio" }).click();
+  await expect(page.getByText("Preparing audio · you can read while you wait.")).toBeVisible();
+  await expect.poll(() => reader.evaluate((el) => el.scrollTop)).toBeGreaterThan(600);
+  mock.setAudio("ready");
+  await expect(page.getByText("Audio ready · press Play whenever you like.")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole("button", { name: "Play", exact: true })).toBeEnabled();
+  await expect.poll(() => page.locator("audio").evaluate((el: HTMLAudioElement) => el.currentTime)).toBeCloseTo(2, 0);
+  await expect.poll(() => reader.evaluate((el) => el.scrollTop)).toBeGreaterThan(600);
+  await page.getByRole("button", { name: "Play", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
+  await reader.evaluate((el) => { el.scrollTop = 650; });
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  await expect.poll(() => reader.evaluate((el) => el.scrollTop)).toBeGreaterThan(600);
+  await page.screenshot({ path: "test-results/read-while-audio-ready.png", fullPage: true });
+  expect(errors).toEqual([]);
 });

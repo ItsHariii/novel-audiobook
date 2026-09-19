@@ -43,11 +43,18 @@ export async function cleanAudioCache(incoming = 0) {
   if (!Number.isFinite(limit) || limit < 1) throw new Error("Invalid AUDIO_CACHE_MAX_BYTES");
   let total = Number(check(await db.rpc("audio_cache_bytes")));
   const started = Date.now();
-  while (total + incoming > limit && Date.now() - started < 10_000) {
+  // Audio/text assets are a temporary listening buffer, not a book archive.
+  // A short grace period lets a preparing worker attach a newly-created asset
+  // before another worker considers it abandoned.
+  const orphanCutoff = Date.now() - 2 * 60_000;
+  while (Date.now() - started < 10_000) {
     const assets = check(await db.rpc("audio_cache_candidates")) as Array<{ id: string; generation: string; bytes: number }>;
+    if (!assets.length) break;
+    const metadata = check(await db.from("audio_assets").select("id,last_used_at").in("id", assets.map((a) => a.id))) ?? [];
+    const lastUsed = new Map(metadata.map((a) => [a.id, Date.parse(a.last_used_at)]));
     let removed = false;
     for (const asset of assets) {
-      if (total + incoming <= limit) break;
+      if (total + incoming <= limit && (lastUsed.get(asset.id) ?? Infinity) > orphanCutoff) continue;
       const retired = check(await db.rpc("retire_audio_asset", { asset: asset.id, incarnation: asset.generation }));
       if (!retired) continue;
       removed = true;
@@ -56,7 +63,9 @@ export async function cleanAudioCache(incoming = 0) {
     if (!removed) break;
   }
   await collectGarbage();
-  if (total + incoming > limit) throw new Error("Audio cache is full. Close unused listening sessions and retry.");
+  // Report quota errors from the claimed synthesis job so its retry/error state
+  // is visible to the player; idle housekeeping must not block job claiming.
+  if (incoming > 0 && total + incoming > limit) throw new Error("Audio cache is full. Close unused listening sessions and retry.");
 }
 
 async function collectGarbage() {
@@ -98,7 +107,7 @@ async function generate(job: Job) {
 
 export async function runAudioWorker() {
   const db = adminSupabase();
-  await collectGarbage();
+  await cleanAudioCache();
   const job = check(await db.rpc("claim_audio_job")) as Job | null;
   if (!job) return false;
   const started = Date.now();

@@ -407,7 +407,7 @@ export default function Player() {
   }, []);
 
   const loadChapterFromUrl = useCallback(
-    async (url: string, autoplay = false, requestedVoice = voice) => {
+    async (url: string, autoplay = false, requestedVoice = voice, keepText = false) => {
       captureRef.current();
       void library.flush();
       abortRef.current?.abort();
@@ -415,29 +415,49 @@ export default function Player() {
       const ac = new AbortController();
       abortRef.current = ac;
       setError(null);
-      setChapterLoading(true);
+      setChapterLoading(!keepText);
       setIsPlaying(false);
       setNextPrefetch(null);
       transitioningRef.current = false;
       wantPlayRef.current = autoplay;
       recoveryAttemptsRef.current = 0;
       audioRef.current?.pause();
+      detachHls();
+      attachedUrlRef.current = "";
+      audioRef.current?.removeAttribute("src");
+      audioRef.current?.load();
+      pendingRestoreRef.current = null;
+      setIsBuffering(false);
+      if (keepText) setCurrent((previous) => previous ? { ...previous, audioPending: true, sessionId: undefined, playlistUrl: "" } : null);
+      else setCurrent(null);
+      let textLoaded = false;
       try {
         if (requestedVoice !== voice) { lastVoiceRef.current = requestedVoice; setVoice(requestedVoice); }
         let legacy: { time?: number; chunk?: number; offset?: number; voice?: string } = {};
         try { legacy = JSON.parse(localStorage.getItem(LS_POSITION_PREFIX + url) || "{}"); } catch {}
         const saved = library.restore(url);
         if (saved) writeLegacyPosition(saved);
-        const loaded = library.enabled
-          ? await playback.prepare(url, requestedVoice, ac.signal)
-          : await fetchChapterMeta(url, requestedVoice, ac.signal);
+        // Start both independently. A rejected audio job must never hide text
+        // or become an unhandled rejection while the metadata request finishes.
+        const preparation = library.enabled ? playback.prepare(url, requestedVoice, ac.signal)
+          .then((loaded) => ({ loaded, error: null }), (error: unknown) => ({ loaded: null, error })) : null;
+        const text = await fetchChapterMeta(url, requestedVoice, ac.signal);
         if (ac.signal.aborted) return;
-        setCurrent(loaded);
-        setCurrentChunkIndex(0);
-        setChunkPosition(0);
-        setChunkDuration(loaded.chunks[0]?.estDuration ?? 0);
+        textLoaded = true;
+        const preview = library.enabled ? { ...text, audioPending: true, playlistUrl: "" } : text;
+        setCurrent(preview);
+        if (!keepText) {
+          setCurrentChunkIndex(0);
+          setChunkPosition(0);
+          setChunkDuration(preview.chunks[0]?.estDuration ?? 0);
+        }
+        setChapterLoading(false);
         try { localStorage.setItem(LS_URL, url); } catch {}
-        pushHistory(loaded.chapter);
+        pushHistory(preview.chapter);
+        const prepared = await preparation;
+        if (ac.signal.aborted) return;
+        if (prepared && !prepared.loaded) throw prepared.error;
+        const loaded = prepared?.loaded ?? text;
         if (loaded.sessionId) {
           let time = saved?.voice === requestedVoice ? saved.audioTime : 0;
           if (!saved) {
@@ -455,16 +475,23 @@ export default function Player() {
           }
           pendingRestoreRef.current = { chapter: url, time: Math.max(0, Math.min(time, loaded.totalDuration - 0.1)) };
         }
+        setCurrent(loaded);
         if (autoplay) wantPlayRef.current = true;
         await attachSource(loaded.playlistUrl);
         setChapterLoading(false);
       } catch (err) {
-        if ((err as Error).name === "AbortError") return;
+        if (ac.signal.aborted || (err as Error).name === "AbortError") return;
+        // Do not keep preparing an invisible chapter after a text fetch fails.
+        if (!textLoaded && library.enabled) {
+          ac.abort();
+          void playback.close();
+        }
         setChapterLoading(false);
+        wantPlayRef.current = false;
         setError((err as Error).message);
       }
     },
-    [attachSource, fetchChapterMeta, pushHistory, voice, library.enabled, library.restore, library.flush, playback.prepare],
+    [attachSource, detachHls, fetchChapterMeta, pushHistory, voice, library.enabled, library.restore, library.flush, playback.prepare, playback.close],
   );
 
   // Seamless transition to the chained next chapter without going through
@@ -543,7 +570,7 @@ export default function Player() {
     if (lastVoiceRef.current === voice) return;
     lastVoiceRef.current = voice;
     if (!current) return;
-    if (timing && audioRef.current) {
+    if (timing && audioRef.current && !current.audioPending) {
       const time = Math.max(0, audioRef.current.currentTime - (current.startOffset ?? 0));
       const chunk = findChunkAtTime(timing.cumDurations, time);
       voiceAnchorRef.current = { url: current.chapter.url, chunk,
@@ -594,7 +621,7 @@ export default function Player() {
     void attachSource(url);
   }, [sleep, playbackRate, current, timing, currentChunkIndex, chapterLoading, attachSource]);
   useEffect(() => {
-    if (!current || current.sessionId) return;
+    if (!current || current.sessionId || current.audioPending) return;
     const key = LS_POSITION_PREFIX + current.chapter.url;
     const saved = localStorage.getItem(key);
     if (!saved) return;
@@ -619,7 +646,7 @@ export default function Player() {
   // chapter boundary, letting the crossover fire exactly when the chained next
   // chapter starts instead of minutes late (which replayed its opening).
   useEffect(() => {
-    if (!current || current.sessionId || !isPlaying) return;
+    if (!current || current.sessionId || current.audioPending || !isPlaying) return;
     const key = current.playlistUrl;
     const url = `/api/chapter-durations?url=${encodeURIComponent(current.chapter.url)}&voice=${encodeURIComponent(current.voice)}`;
     const ac = new AbortController();
@@ -652,7 +679,7 @@ export default function Player() {
 
   // Auto-advance to next chapter on end.
   const onEnded = useCallback(() => {
-    if (!current) return;
+    if (!current || current.audioPending || chapterLoading) return;
     captureRef.current();
     void library.flush();
     if (current.sessionId) {
@@ -684,11 +711,11 @@ export default function Player() {
       return;
     }
     setIsPlaying(false);
-  }, [current, timing, sleep, loadChapterFromUrl, nextPrefetch, crossoverToNext, library.flush]);
+  }, [current, timing, sleep, loadChapterFromUrl, nextPrefetch, crossoverToNext, library.flush, chapterLoading]);
 
   const togglePlay = useCallback(async () => {
     const a = audioRef.current;
-    if (!a || !current) return;
+    if (!a || !current || current.audioPending) return;
     if (a.paused) {
       try {
         await a.play();
@@ -704,10 +731,10 @@ export default function Player() {
 
   const seekAbsolute = useCallback((t: number) => {
     const a = audioRef.current;
-    if (!a) return;
+    if (!a || current?.audioPending) return;
     a.currentTime = (current?.startOffset ?? 0) + Math.max(0, t);
     captureRef.current();
-  }, [current?.startOffset]);
+  }, [current?.startOffset, current?.audioPending]);
 
   const seekSeconds = useCallback(
     (delta: number) => {
@@ -723,6 +750,11 @@ export default function Player() {
     (i: number) => {
       if (!current || !timing) return;
       const idx = Math.max(0, Math.min(current.chunks.length - 1, i));
+      if (current.audioPending) {
+        setCurrentChunkIndex(idx);
+        readerPositionRef.current = { chunk: idx, offset: 0 };
+        return;
+      }
       seekAbsolute(timing.cumDurations[idx]);
     },
     [current, timing, seekAbsolute],
@@ -743,7 +775,7 @@ export default function Player() {
       artist: current.chapter.bookTitle || current.chapter.source,
       album: "Tome",
     });
-    navigator.mediaSession.setActionHandler("play", () => { void audioRef.current?.play(); });
+    navigator.mediaSession.setActionHandler("play", () => { if (!current.audioPending) void audioRef.current?.play(); });
     navigator.mediaSession.setActionHandler("pause", () => { wantPlayRef.current = false; audioRef.current?.pause(); });
     navigator.mediaSession.setActionHandler("nexttrack", goNextChapter);
     navigator.mediaSession.setActionHandler("previoustrack", goPrevChapter);
@@ -774,12 +806,13 @@ export default function Player() {
       if (!a) return;
       const active = current.sessionId ? playback.atTime(a.currentTime) : current;
       if (!active) return; // Wait for the durable timeline after background catch-up.
-      const time = Math.max(0, Math.min(active.totalDuration, a.currentTime - (active.startOffset ?? 0)));
       const saved = library.restore(active.chapter.url);
+      const time = active.audioPending ? saved?.audioTime ?? 0
+        : Math.max(0, Math.min(active.totalDuration, a.currentTime - (active.startOffset ?? 0)));
       const p: ChapterProgress = {
         chapterUrl: active.chapter.url, bookKey: bookKey(active.chapter), title: active.chapter.title,
         bookTitle: active.chapter.bookTitle, chapterLabel: active.chapter.chapterLabel, source: active.chapter.source,
-        mode: a.paused ? viewMode : "audio", audioTime: Number(time.toFixed(3)), voice: active.voice,
+        mode: a.paused ? viewMode : "audio", audioTime: Number(time.toFixed(3)), voice: active.audioPending ? saved?.voice ?? active.voice : active.voice,
         readerChunk: active.chapter.url === current.chapter.url ? readerPositionRef.current.chunk : saved?.readerChunk ?? 0,
         readerOffset: active.chapter.url === current.chapter.url ? readerPositionRef.current.offset : saved?.readerOffset ?? 0,
         wordIndex: active.chapter.url === current.chapter.url ? rsvpWordIndexRef.current : saved?.wordIndex ?? 0,
@@ -812,7 +845,7 @@ export default function Player() {
 
   const onLoadedMetadata = useCallback(() => {
     const a = audioRef.current;
-    if (!a || !current || chapterLoading) return;
+    if (!a || !current || current.audioPending || chapterLoading) return;
     a.playbackRate = playbackRate;
     (a as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = true;
     const pending = pendingRestoreRef.current;
@@ -830,7 +863,7 @@ export default function Player() {
 
   const onTimeUpdate = useCallback(() => {
     const a = audioRef.current;
-    if (!a || !current || !timing) return;
+    if (!a || !current || current.audioPending || !timing) return;
     if (transitioningRef.current) return;
     let active = current;
     if (current.sessionId) {
@@ -916,7 +949,7 @@ export default function Player() {
       }
     } catch {}
     setRsvpWordIndex(0);
-  }, [current]);
+  }, [current?.chapter.url]);
 
   // Persist RSVP word index per chapter while in RSVP mode. Refs avoid
   // re-creating the interval on every word tick.
@@ -976,7 +1009,7 @@ export default function Player() {
         const word = rsvpWords[clamped];
         if (word && word.chunkIndex !== currentChunkIndex) {
           const a = audioRef.current;
-          if (a) a.currentTime = (current.startOffset ?? 0) + (timing?.cumDurations[word.chunkIndex] ?? 0);
+          if (a && !current.audioPending) a.currentTime = (current.startOffset ?? 0) + (timing?.cumDurations[word.chunkIndex] ?? 0);
           setCurrentChunkIndex(word.chunkIndex);
           setChunkPosition(0);
           setChunkDuration(timing?.durations[word.chunkIndex] ?? 0);
@@ -1155,13 +1188,14 @@ export default function Player() {
         )}
 
         <main className="flex min-h-0 flex-col gap-3">
-          {playback.preparing && <p role="status" className="px-4 text-sm text-[var(--color-muted)]">Preparing audio · the first chapter may take a moment.</p>}
+          {playback.preparing && <p role="status" className="px-4 text-sm text-[var(--color-muted)]">Preparing audio · you can read while you wait.</p>}
+          {current?.sessionId && !current.audioPending && !isPlaying && !playback.error && !error && <p role="status" className="px-4 text-sm text-[var(--color-accent)]">Audio ready · press Play whenever you like.</p>}
           {(playback.error || (error && library.enabled)) && <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-border)] p-3 text-sm">
-            <span>{playback.error || error}</span>
+            <span>{playback.error || error}{current?.audioPending && " You can keep reading."}</span>
             <button className="shrink-0 text-[var(--color-accent)]" onClick={async () => {
               setError(null);
               if (playback.session) await authorizedFetch(`/api/playback-sessions/${playback.session.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "retry" }) });
-              void loadChapterFromUrl(current?.chapter.url || inputUrl, isPlaying);
+              void loadChapterFromUrl(current?.chapter.url || inputUrl, isPlaying, voice, !!current);
             }}>Retry audio</button>
           </div>}
           {chapterLoading && <LoadingSkeleton />}
@@ -1181,12 +1215,14 @@ export default function Player() {
                   />
                 ) : (
                   <ReaderPanel
+                    chapterKey={current.chapter.url}
                     chunks={current.chunks}
                     currentChunkIndex={currentChunkIndex}
                     onPickChunk={onPickChunk}
                     readerFontSize={readerFontSize}
                     readingMode={!playerBarVisible}
-                    restorePosition={!playerBarVisible ? readerRestore : undefined}
+                    followAudio={isPlaying}
+                    restorePosition={readerRestore}
                     onPosition={(position) => { readerPositionRef.current = position; }}
                     onUserScroll={() => setHeaderHidden(true)}
                     canReachEnd={!!current.chapter.nextUrl}
@@ -1263,7 +1299,7 @@ export default function Player() {
         onPlay={() => setIsPlaying(true)}
         onError={() => {
           setIsBuffering(false);
-          if (!current) return;
+          if (!current || current.audioPending || !attachedUrlRef.current) return;
           if (++recoveryAttemptsRef.current > 3) { setError("Playback interrupted. Use Retry audio to continue."); return; }
           pendingRestoreRef.current = { chapter: current.chapter.url, time: audioRef.current?.currentTime ?? 0 };
           wantPlayRef.current = isPlaying;
@@ -1288,7 +1324,7 @@ export default function Player() {
       )}
       {playerBarVisible && viewMode !== "rsvp" && (
         <PlayerBar
-          hasChapter={!!current}
+          hasChapter={!!current && !current.audioPending && !chapterLoading}
           isPlaying={isPlaying}
           progressPercent={progressPercent}
           currentTime={chunkPosition}

@@ -61,7 +61,11 @@ test("sleep playlists stop at a native media boundary without JavaScript", () =>
 });
 
 test("public URL guard excludes internal IPv4, mapped IPv6 and localhost", () => {
-  for (const ip of ["127.0.0.1", "10.1.2.3", "169.254.169.254", "172.16.0.1", "192.168.1.1", "100.64.0.1", "::1", "::ffff:127.0.0.1", "fc00::1", "fe80::1"]) assert.equal(publicAddress(ip), false, ip);
+  for (const ip of ["127.0.0.1", "10.1.2.3", "169.254.169.254", "172.16.0.1", "192.168.1.1", "192.0.0.8", "192.0.2.1", "192.88.99.1", "198.51.100.1", "203.0.113.1", "100.64.0.1", "::1", "::ffff:127.0.0.1", "fc00::1", "fe80::1"]) assert.equal(publicAddress(ip), false, ip);
   assert.equal(publicAddress("1.1.1.1"), true);
   assert.equal(publicAddress("2606:4700:4700::1111"), true);
+});
+
+test("public URL guard permits Amethyst Writers' public WordPress addresses", () => {
+  for (const ip of ["192.0.78.131", "192.0.78.199", "192.0.1.1", "192.0.255.255"]) assert.equal(publicAddress(ip), true, ip);
 });

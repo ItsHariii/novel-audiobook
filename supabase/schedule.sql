@@ -18,7 +18,12 @@ begin
           where c.asset_id = j.payload->>'assetId' and s.expires_at > now()
         ))
       )
-  ) and not exists (select 1 from public.audio_gc) then return; end if;
+  ) and not exists (select 1 from public.audio_gc)
+    and not exists (select 1 from public.playback_sessions where expires_at <= now())
+    and not exists (
+      select 1 from public.audio_assets a where a.last_used_at < now() - interval '2 minutes'
+        and not exists (select 1 from public.session_chapters c where c.asset_id = a.id)
+    ) then return; end if;
   select decrypted_secret into endpoint from vault.decrypted_secrets where name = 'tome_worker_url';
   select decrypted_secret into secret from vault.decrypted_secrets where name = 'tome_worker_secret';
   if endpoint is null or secret is null then raise exception 'Configure the Tome worker Vault secrets first'; end if;
