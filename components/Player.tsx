@@ -14,6 +14,12 @@ import { SettingsDrawer } from "@/components/player/SettingsDrawer";
 import { Sidebar } from "@/components/player/Sidebar";
 import type { SleepMode } from "@/components/player/SleepTimerButton";
 import { Toast } from "@/components/player/Toast";
+import { LibraryAccount } from "@/components/player/LibraryAccount";
+import { useLibrary } from "@/lib/library/useLibrary";
+import { bookKey, type ChapterProgress } from "@/lib/library/types";
+import { writeLegacyPosition } from "@/lib/library/local";
+import { authorizedFetch } from "@/lib/supabase/browser";
+import { usePlaybackSession } from "@/lib/audio/usePlaybackSession";
 import type {
   Chunk,
   HistoryItem,
@@ -122,6 +128,8 @@ function findChunkAtTime(cumDurations: number[], t: number): number {
 }
 
 export default function Player() {
+  const library = useLibrary();
+  const playback = usePlaybackSession();
   const [inputUrl, setInputUrl] = useState("");
   const [current, setCurrent] = useState<LoadedChapter | null>(null);
   const [nextPrefetch, setNextPrefetch] = useState<LoadedChapter | null>(null);
@@ -168,6 +176,14 @@ export default function Player() {
   const hlsRef = useRef<HlsLike | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const prefetchAbortRef = useRef<AbortController | null>(null);
+  const captureRef = useRef<() => void>(() => {});
+  const readerPositionRef = useRef({ chunk: 0, offset: 0 });
+  const recoveryAttemptsRef = useRef(0);
+  const attachedUrlRef = useRef("");
+  const cloudSleepRef = useRef<{ sleep: SleepMode; sessionId: string; rate: number; stop: number } | null>(null);
+  const [readerRestore, setReaderRestore] = useState({ chunk: 0, offset: 0 });
+  const [localHydrated, setLocalHydrated] = useState(false);
+  const voiceAnchorRef = useRef<{ url: string; chunk: number; fraction: number } | null>(null);
   // Latch playback intent across the (single) chapter-boundary src swap so a
   // spurious `pause` event mid-swap can't drop us out of the playing state.
   const wantPlayRef = useRef(false);
@@ -217,6 +233,7 @@ export default function Player() {
     }
     const attr = document.documentElement.getAttribute("data-theme");
     if (attr === "light" || attr === "dark") setTheme(attr);
+    setLocalHydrated(true);
   }, []);
 
   useEffect(() => {
@@ -233,7 +250,7 @@ export default function Player() {
   useEffect(() => { try { localStorage.setItem(LS_VOICE, voice); } catch {} }, [voice]);
   useEffect(() => { try { localStorage.setItem(LS_SPEED, String(playbackRate)); } catch {} }, [playbackRate]);
   useEffect(() => {
-    try { localStorage.setItem(LS_HISTORY, JSON.stringify(history.slice(0, 20))); } catch {}
+    try { localStorage.setItem(LS_HISTORY, JSON.stringify(history)); } catch {}
   }, [history]);
   useEffect(() => {
     try { localStorage.setItem(LS_READER_FONT, String(readerFontSize)); } catch {}
@@ -298,7 +315,7 @@ export default function Player() {
     tick();
     const id = window.setInterval(tick, 250);
     return () => window.clearInterval(id);
-  }, [sleep, currentChunkIndex]);
+  }, [sleep]);
 
   const cancelSleep = useCallback(() => {
     const a = audioRef.current;
@@ -309,7 +326,7 @@ export default function Player() {
 
   const fetchChapterMeta = useCallback(
     async (url: string, requestedVoice: string, signal?: AbortSignal): Promise<LoadedChapter> => {
-      const res = await fetch(
+      const res = await authorizedFetch(
         `/api/chapter-meta?url=${encodeURIComponent(url)}&voice=${encodeURIComponent(requestedVoice)}`,
         { signal },
       );
@@ -334,18 +351,36 @@ export default function Player() {
   const attachSource = useCallback(async (playlistUrl: string) => {
     const audio = audioRef.current;
     if (!audio) return;
+    attachedUrlRef.current = playlistUrl;
     detachHls();
     const native = audio.canPlayType("application/vnd.apple.mpegurl");
-    if (native) {
+    // Chrome may advertise native HLS but reject packed-MP3 segments. Keep
+    // Apple's native pipeline for background playback and use hls.js elsewhere.
+    const appleWebKit = /iPad|iPhone|iPod/.test(navigator.userAgent)
+      || navigator.vendor.includes("Apple")
+      || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    if (native && appleWebKit) {
       audio.src = playlistUrl;
       audio.load();
       return;
     }
     try {
       const mod = await import("hls.js");
+      if (attachedUrlRef.current !== playlistUrl) return;
       const Hls = (mod as unknown as { default: typeof import("hls.js").default }).default;
       if (Hls.isSupported()) {
-        const hls = new Hls({ enableWorker: false });
+        const hls = new Hls({ enableWorker: true, startPosition: pendingRestoreRef.current?.time ?? 0, maxBufferLength: 90 });
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (!data.fatal) return;
+          if (++recoveryAttemptsRef.current > 3) {
+            setError("Audio could not recover. Use Retry audio to continue.");
+            setIsBuffering(false);
+            return;
+          }
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad(audio.currentTime);
+          else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+          else setError("Audio playback failed. Use Retry audio to continue.");
+        });
         hls.loadSource(playlistUrl);
         hls.attachMedia(audio);
         hlsRef.current = hls as unknown as HlsLike;
@@ -366,12 +401,15 @@ export default function Player() {
       lastAt: Date.now(),
       bookTitle: chapter.bookTitle,
       chapterLabel: chapter.chapterLabel,
+      bookId: bookKey(chapter),
     };
-    setHistory((prev) => [item, ...prev.filter((p) => p.url !== item.url)].slice(0, 20));
+    setHistory((prev) => [item, ...prev.filter((p) => p.url !== item.url)]);
   }, []);
 
   const loadChapterFromUrl = useCallback(
-    async (url: string, autoplay = false) => {
+    async (url: string, autoplay = false, requestedVoice = voice) => {
+      captureRef.current();
+      void library.flush();
       abortRef.current?.abort();
       prefetchAbortRef.current?.abort();
       const ac = new AbortController();
@@ -381,8 +419,18 @@ export default function Player() {
       setIsPlaying(false);
       setNextPrefetch(null);
       transitioningRef.current = false;
+      wantPlayRef.current = autoplay;
+      recoveryAttemptsRef.current = 0;
+      audioRef.current?.pause();
       try {
-        const loaded = await fetchChapterMeta(url, voice, ac.signal);
+        if (requestedVoice !== voice) { lastVoiceRef.current = requestedVoice; setVoice(requestedVoice); }
+        let legacy: { time?: number; chunk?: number; offset?: number; voice?: string } = {};
+        try { legacy = JSON.parse(localStorage.getItem(LS_POSITION_PREFIX + url) || "{}"); } catch {}
+        const saved = library.restore(url);
+        if (saved) writeLegacyPosition(saved);
+        const loaded = library.enabled
+          ? await playback.prepare(url, requestedVoice, ac.signal)
+          : await fetchChapterMeta(url, requestedVoice, ac.signal);
         if (ac.signal.aborted) return;
         setCurrent(loaded);
         setCurrentChunkIndex(0);
@@ -390,6 +438,23 @@ export default function Player() {
         setChunkDuration(loaded.chunks[0]?.estDuration ?? 0);
         try { localStorage.setItem(LS_URL, url); } catch {}
         pushHistory(loaded.chapter);
+        if (loaded.sessionId) {
+          let time = saved?.voice === requestedVoice ? saved.audioTime : 0;
+          if (!saved) {
+            time = legacy.voice && legacy.voice !== requestedVoice ? 0 : legacy.time || 0;
+          }
+          if (!time && legacy.time === undefined && typeof legacy.chunk === "number") {
+            const index = Math.max(0, Math.min(loaded.chunks.length - 1, legacy.chunk));
+            time = loaded.cumDurations[index] + (legacy.offset || 0);
+          }
+          const anchor = voiceAnchorRef.current;
+          if (anchor?.url === url) {
+            const index = Math.min(anchor.chunk, loaded.chunks.length - 1);
+            time = loaded.cumDurations[index] + loaded.chunks[index].estDuration * anchor.fraction;
+            voiceAnchorRef.current = null;
+          }
+          pendingRestoreRef.current = { chapter: url, time: Math.max(0, Math.min(time, loaded.totalDuration - 0.1)) };
+        }
         if (autoplay) wantPlayRef.current = true;
         await attachSource(loaded.playlistUrl);
         setChapterLoading(false);
@@ -399,7 +464,7 @@ export default function Player() {
         setError((err as Error).message);
       }
     },
-    [attachSource, fetchChapterMeta, pushHistory, voice],
+    [attachSource, fetchChapterMeta, pushHistory, voice, library.enabled, library.restore, library.flush, playback.prepare],
   );
 
   // Seamless transition to the chained next chapter without going through
@@ -439,11 +504,37 @@ export default function Player() {
   // First-mount auto-resume.
   useEffect(() => {
     if (didAutoResumeRef.current) return;
-    const savedUrl = localStorage.getItem(LS_URL);
+    if (!localHydrated) return;
+    if (library.enabled && (!library.hydrated || !library.user)) return;
+    const savedUrl = library.entries[0]?.url || localStorage.getItem(LS_URL);
     if (!savedUrl) return;
     didAutoResumeRef.current = true;
-    void loadChapterFromUrl(savedUrl, false);
-  }, [loadChapterFromUrl]);
+    const saved = library.restore(savedUrl);
+    if (saved) setViewMode(saved.mode);
+    void loadChapterFromUrl(savedUrl, false, saved?.voice);
+  }, [loadChapterFromUrl, localHydrated, library.enabled, library.hydrated, library.user, library.entries, library.restore]);
+
+  useEffect(() => {
+    if (!current) return;
+    let position = { chunk: 0, offset: 0 };
+    try { position = JSON.parse(localStorage.getItem(`nab:reader:${current.chapter.url}`) || JSON.stringify(position)); } catch {}
+    readerPositionRef.current = position;
+    setReaderRestore(position);
+  }, [current?.chapter.url]);
+
+  useEffect(() => {
+    const restoreCloud = (event: Event) => {
+      const p = (event as CustomEvent<ChapterProgress>).detail;
+      if (p.chapterUrl === current?.chapter.url) {
+        // Do not recapture the losing position while applying an explicit choice.
+        captureRef.current = () => {};
+        setViewMode(p.mode);
+        void loadChapterFromUrl(p.chapterUrl, false, p.voice);
+      }
+    };
+    window.addEventListener("nab:restore-cloud", restoreCloud);
+    return () => window.removeEventListener("nab:restore-cloud", restoreCloud);
+  }, [current?.chapter.url, loadChapterFromUrl]);
 
   // Reload chapter when voice changes mid-session (server cache keyed by voice).
   // Only fires if a chapter is already loaded and the voice actually changed.
@@ -452,12 +543,19 @@ export default function Player() {
     if (lastVoiceRef.current === voice) return;
     lastVoiceRef.current = voice;
     if (!current) return;
+    if (timing && audioRef.current) {
+      const time = Math.max(0, audioRef.current.currentTime - (current.startOffset ?? 0));
+      const chunk = findChunkAtTime(timing.cumDurations, time);
+      voiceAnchorRef.current = { url: current.chapter.url, chunk,
+        fraction: Math.max(0, Math.min(1, (time - timing.cumDurations[chunk]) / (timing.durations[chunk] || 1))) };
+    }
     void loadChapterFromUrl(current.chapter.url, isPlaying);
   }, [voice, current, isPlaying, loadChapterFromUrl]);
 
   // Pre-warm next chapter's parse + segment cache on the server. We only need
   // the meta to know it's valid; segments synth lazy on transition.
   useEffect(() => {
+    if (library.enabled) return;
     if (!current?.chapter.nextUrl) return;
     if (nextPrefetch && nextPrefetch.chapter.url === current.chapter.nextUrl) return;
     prefetchAbortRef.current?.abort();
@@ -471,12 +569,32 @@ export default function Player() {
       } catch {}
     })();
     return () => ac.abort();
-  }, [current, nextPrefetch, fetchChapterMeta, voice]);
+  }, [current, nextPrefetch, fetchChapterMeta, voice, library.enabled]);
 
   // Restore saved position once chapter is attached + metadata loaded.
   const pendingRestoreRef = useRef<{ chapter: string; time: number } | null>(null);
   useEffect(() => {
-    if (!current) return;
+    const audio = audioRef.current;
+    if (!current?.sessionId || !audio || chapterLoading || !timing) return;
+    let url = current.playlistUrl;
+    if (sleep) {
+      const previous = cloudSleepRef.current;
+      const unchanged = previous?.sleep === sleep && previous.sessionId === current.sessionId && previous.rate === playbackRate;
+      const stop = unchanged ? previous.stop : sleep.kind === "chapter"
+        ? (current.startOffset ?? 0) + timing.totalDuration
+        : sleep.kind === "chunk"
+          ? (current.startOffset ?? 0) + timing.cumDurations[currentChunkIndex + 1]
+          : audio.currentTime + Math.max(0.1, (sleep.endsAt - Date.now()) / 1000) * playbackRate;
+      cloudSleepRef.current = { sleep, sessionId: current.sessionId, rate: playbackRate, stop };
+      url += `&stop=${stop}`;
+    } else cloudSleepRef.current = null;
+    if (url === attachedUrlRef.current) return;
+    pendingRestoreRef.current = { chapter: current.chapter.url, time: audio.currentTime };
+    wantPlayRef.current = !audio.paused;
+    void attachSource(url);
+  }, [sleep, playbackRate, current, timing, currentChunkIndex, chapterLoading, attachSource]);
+  useEffect(() => {
+    if (!current || current.sessionId) return;
     const key = LS_POSITION_PREFIX + current.chapter.url;
     const saved = localStorage.getItem(key);
     if (!saved) return;
@@ -501,7 +619,7 @@ export default function Player() {
   // chapter boundary, letting the crossover fire exactly when the chained next
   // chapter starts instead of minutes late (which replayed its opening).
   useEffect(() => {
-    if (!current || !isPlaying) return;
+    if (!current || current.sessionId || !isPlaying) return;
     const key = current.playlistUrl;
     const url = `/api/chapter-durations?url=${encodeURIComponent(current.chapter.url)}&voice=${encodeURIComponent(current.voice)}`;
     const ac = new AbortController();
@@ -535,6 +653,14 @@ export default function Player() {
   // Auto-advance to next chapter on end.
   const onEnded = useCallback(() => {
     if (!current) return;
+    captureRef.current();
+    void library.flush();
+    if (current.sessionId) {
+      wantPlayRef.current = false;
+      setIsPlaying(false);
+      setSleep(null);
+      return;
+    }
     if (sleep?.kind === "chapter") {
       wantPlayRef.current = false;
       setIsPlaying(false);
@@ -558,7 +684,7 @@ export default function Player() {
       return;
     }
     setIsPlaying(false);
-  }, [current, timing, sleep, loadChapterFromUrl, nextPrefetch, crossoverToNext]);
+  }, [current, timing, sleep, loadChapterFromUrl, nextPrefetch, crossoverToNext, library.flush]);
 
   const togglePlay = useCallback(async () => {
     const a = audioRef.current;
@@ -579,17 +705,18 @@ export default function Player() {
   const seekAbsolute = useCallback((t: number) => {
     const a = audioRef.current;
     if (!a) return;
-    a.currentTime = Math.max(0, t);
-  }, []);
+    a.currentTime = (current?.startOffset ?? 0) + Math.max(0, t);
+    captureRef.current();
+  }, [current?.startOffset]);
 
   const seekSeconds = useCallback(
     (delta: number) => {
       const a = audioRef.current;
       if (!a || !timing) return;
-      const newT = a.currentTime + delta;
+      const newT = a.currentTime - (current?.startOffset ?? 0) + delta;
       seekAbsolute(Math.min(Math.max(0, newT), timing.totalDuration - 0.1));
     },
-    [timing, seekAbsolute],
+    [timing, seekAbsolute, current?.startOffset],
   );
 
   const onPickChunk = useCallback(
@@ -616,8 +743,8 @@ export default function Player() {
       artist: current.chapter.bookTitle || current.chapter.source,
       album: "Tome",
     });
-    navigator.mediaSession.setActionHandler("play", () => void togglePlay());
-    navigator.mediaSession.setActionHandler("pause", () => void togglePlay());
+    navigator.mediaSession.setActionHandler("play", () => { void audioRef.current?.play(); });
+    navigator.mediaSession.setActionHandler("pause", () => { wantPlayRef.current = false; audioRef.current?.pause(); });
     navigator.mediaSession.setActionHandler("nexttrack", goNextChapter);
     navigator.mediaSession.setActionHandler("previoustrack", goPrevChapter);
     navigator.mediaSession.setActionHandler("seekbackward", (d) => seekSeconds(-(d.seekOffset ?? 15)));
@@ -639,23 +766,39 @@ export default function Player() {
     navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
   }, [isPlaying]);
 
-  // Persist playback position: save raw `audio.currentTime` on a 3s interval +
-  // visibility/pagehide/beforeunload guards. Same triple-guard as old impl.
+  // Save chapter-relative time even after multiple background transitions.
   useEffect(() => {
-    if (!current) return;
-    const key = LS_POSITION_PREFIX + current.chapter.url;
-    const save = () => {
+    captureRef.current = () => {
+      if (!current || chapterLoading || pendingRestoreRef.current) return;
       const a = audioRef.current;
       if (!a) return;
+      const active = current.sessionId ? playback.atTime(a.currentTime) : current;
+      if (!active) return; // Wait for the durable timeline after background catch-up.
+      const time = Math.max(0, Math.min(active.totalDuration, a.currentTime - (active.startOffset ?? 0)));
+      const saved = library.restore(active.chapter.url);
+      const p: ChapterProgress = {
+        chapterUrl: active.chapter.url, bookKey: bookKey(active.chapter), title: active.chapter.title,
+        bookTitle: active.chapter.bookTitle, chapterLabel: active.chapter.chapterLabel, source: active.chapter.source,
+        mode: a.paused ? viewMode : "audio", audioTime: Number(time.toFixed(3)), voice: active.voice,
+        readerChunk: active.chapter.url === current.chapter.url ? readerPositionRef.current.chunk : saved?.readerChunk ?? 0,
+        readerOffset: active.chapter.url === current.chapter.url ? readerPositionRef.current.offset : saved?.readerOffset ?? 0,
+        wordIndex: active.chapter.url === current.chapter.url ? rsvpWordIndexRef.current : saved?.wordIndex ?? 0,
+      };
       try {
-        localStorage.setItem(key, JSON.stringify({ time: a.currentTime }));
+        writeLegacyPosition(p);
+        localStorage.setItem(LS_URL, p.chapterUrl);
       } catch {}
+      library.capture(p);
     };
+  }, [current, chapterLoading, viewMode, playback.atTime, library.capture, library.restore]);
+
+  useEffect(() => {
+    const save = () => captureRef.current();
     const t = setInterval(save, 3000);
     const onVisibility = () => {
-      if (document.visibilityState === "hidden") save();
+      if (document.visibilityState === "hidden") { save(); void library.flush(); }
     };
-    const onHide = () => save();
+    const onHide = () => { save(); void library.flush(); };
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("pagehide", onHide);
     window.addEventListener("beforeunload", onHide);
@@ -665,11 +808,11 @@ export default function Player() {
       window.removeEventListener("pagehide", onHide);
       window.removeEventListener("beforeunload", onHide);
     };
-  }, [current]);
+  }, [library.flush]);
 
   const onLoadedMetadata = useCallback(() => {
     const a = audioRef.current;
-    if (!a || !current) return;
+    if (!a || !current || chapterLoading) return;
     a.playbackRate = playbackRate;
     (a as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = true;
     const pending = pendingRestoreRef.current;
@@ -683,23 +826,36 @@ export default function Player() {
       wantPlayRef.current = false;
       a.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
     }
-  }, [current, playbackRate]);
+  }, [current, playbackRate, chapterLoading]);
 
   const onTimeUpdate = useCallback(() => {
     const a = audioRef.current;
     if (!a || !current || !timing) return;
     if (transitioningRef.current) return;
-    const t = a.currentTime;
+    let active = current;
+    if (current.sessionId) {
+      const next = playback.atTime(a.currentTime);
+      if (!next) return;
+      if (next && next.chapter.url !== current.chapter.url) {
+        captureRef.current();
+        active = next;
+        setCurrent(next);
+        pushHistory(next.chapter);
+        void library.flush();
+      }
+    }
+    const t = a.currentTime - (active.startOffset ?? 0);
+    const activeTiming = active === current ? timing : buildTiming(active.chunks, null);
     // Chapter boundary: the chained HLS playlist has played past the end of
     // the current chapter (typical when the PWA was backgrounded). Swap to
     // the prefetched next chapter, seeking to the overshoot offset.
-    if (t > timing.totalDuration + 0.25 && nextPrefetch) {
+    if (!current.sessionId && t > timing.totalDuration + 0.25 && nextPrefetch) {
       void crossoverToNext(nextPrefetch, t - timing.totalDuration);
       return;
     }
-    const idx = findChunkAtTime(timing.cumDurations, t);
-    setChunkPosition(t - timing.cumDurations[idx]);
-    setChunkDuration(timing.durations[idx] ?? 0);
+    const idx = findChunkAtTime(activeTiming.cumDurations, t);
+    setChunkPosition(t - activeTiming.cumDurations[idx]);
+    setChunkDuration(activeTiming.durations[idx] ?? 0);
     if (idx !== currentChunkIndex) {
       setCurrentChunkIndex(idx);
       // Sleep "chunk" mode: pause as soon as the chunk we armed on finishes.
@@ -712,7 +868,11 @@ export default function Player() {
         }
       }
     }
-  }, [current, timing, currentChunkIndex, sleep, nextPrefetch, crossoverToNext]);
+  }, [current, timing, currentChunkIndex, sleep, nextPrefetch, crossoverToNext, playback.atTime, pushHistory, library.flush]);
+
+  useEffect(() => {
+    if (current?.sessionId) onTimeUpdate();
+  }, [playback.session?.chapters.length, onTimeUpdate, current?.sessionId]);
 
   // Double-tap brings header back when hidden.
   useEffect(() => {
@@ -816,7 +976,7 @@ export default function Player() {
         const word = rsvpWords[clamped];
         if (word && word.chunkIndex !== currentChunkIndex) {
           const a = audioRef.current;
-          if (a) a.currentTime = timing?.cumDurations[word.chunkIndex] ?? 0;
+          if (a) a.currentTime = (current.startOffset ?? 0) + (timing?.cumDurations[word.chunkIndex] ?? 0);
           setCurrentChunkIndex(word.chunkIndex);
           setChunkPosition(0);
           setChunkDuration(timing?.durations[word.chunkIndex] ?? 0);
@@ -919,7 +1079,7 @@ export default function Player() {
   const progressPercent = useMemo(() => {
     if (!timing || timing.totalDuration <= 0) return 0;
     const a = audioRef.current;
-    const t = a?.currentTime ?? timing.cumDurations[currentChunkIndex] + chunkPosition;
+    const t = a ? Math.max(0, a.currentTime - (current?.startOffset ?? 0)) : timing.cumDurations[currentChunkIndex] + chunkPosition;
     return Math.min(100, (t / timing.totalDuration) * 100);
   }, [current, currentChunkIndex, chunkPosition]);
 
@@ -932,6 +1092,30 @@ export default function Player() {
   };
 
   const currentChunk = current?.chunks[currentChunkIndex];
+  const libraryHistory = library.enabled ? library.entries : history;
+  const pickHistory = (url: string) => {
+    captureRef.current();
+    const saved = library.restore(url);
+    setInputUrl(url);
+    setSidebarOpen(false);
+    if (saved) setViewMode(saved.mode);
+    void loadChapterFromUrl(url, false, saved?.voice);
+  };
+  const account = library.enabled ? <LibraryAccount email={library.user?.email} ready={library.ready}
+    status={library.status} conflict={library.conflict} onSignIn={library.signIn} onResolve={library.resolve}
+    onSignOut={async () => {
+      captureRef.current();
+      await library.flush();
+      abortRef.current?.abort();
+      audioRef.current?.pause();
+      await playback.close();
+      detachHls();
+      audioRef.current?.removeAttribute("src");
+      audioRef.current?.load();
+      setCurrent(null); setIsPlaying(false); setChapterLoading(false);
+      await library.signOut();
+      didAutoResumeRef.current = false;
+    }} /> : undefined;
 
   return (
     <div className="flex h-dvh flex-col bg-[var(--color-bg)]">
@@ -963,16 +1147,23 @@ export default function Player() {
               onInputUrl={setInputUrl}
               onSubmitUrl={onSubmit}
               chapterLoading={chapterLoading}
-              history={history}
-              onPickHistory={(url) => {
-                setInputUrl(url);
-                void loadChapterFromUrl(url, false);
-              }}
+              history={libraryHistory}
+              account={account}
+              onPickHistory={pickHistory}
             />
           </aside>
         )}
 
         <main className="flex min-h-0 flex-col gap-3">
+          {playback.preparing && <p role="status" className="px-4 text-sm text-[var(--color-muted)]">Preparing audio · the first chapter may take a moment.</p>}
+          {(playback.error || (error && library.enabled)) && <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-border)] p-3 text-sm">
+            <span>{playback.error || error}</span>
+            <button className="shrink-0 text-[var(--color-accent)]" onClick={async () => {
+              setError(null);
+              if (playback.session) await authorizedFetch(`/api/playback-sessions/${playback.session.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "retry" }) });
+              void loadChapterFromUrl(current?.chapter.url || inputUrl, isPlaying);
+            }}>Retry audio</button>
+          </div>}
           {chapterLoading && <LoadingSkeleton />}
           {!chapterLoading && !current && <EmptyState />}
           {!chapterLoading && current && (
@@ -995,6 +1186,8 @@ export default function Player() {
                     onPickChunk={onPickChunk}
                     readerFontSize={readerFontSize}
                     readingMode={!playerBarVisible}
+                    restorePosition={!playerBarVisible ? readerRestore : undefined}
+                    onPosition={(position) => { readerPositionRef.current = position; }}
                     onUserScroll={() => setHeaderHidden(true)}
                     canReachEnd={!!current.chapter.nextUrl}
                     onReachedEnd={() => {
@@ -1045,12 +1238,9 @@ export default function Player() {
               onInputUrl={setInputUrl}
               onSubmitUrl={onSubmit}
               chapterLoading={chapterLoading}
-              history={history}
-              onPickHistory={(url) => {
-                setInputUrl(url);
-                setSidebarOpen(false);
-                void loadChapterFromUrl(url, false);
-              }}
+              history={libraryHistory}
+              account={account}
+              onPickHistory={pickHistory}
             />
           </div>
         </div>
@@ -1065,15 +1255,19 @@ export default function Player() {
         onCanPlay={() => setIsBuffering(false)}
         onPlaying={() => { setIsBuffering(false); setIsPlaying(true); }}
         onPause={() => {
+          captureRef.current();
+          void library.flush();
           if (wantPlayRef.current) return;
           setIsPlaying(false);
         }}
         onPlay={() => setIsPlaying(true)}
         onError={() => {
           setIsBuffering(false);
-          // Recover by re-attaching the playlist; HLS players sometimes fall over
-          // on stale tokens or transient 5xx from the segment route.
-          if (current) void attachSource(current.playlistUrl);
+          if (!current) return;
+          if (++recoveryAttemptsRef.current > 3) { setError("Playback interrupted. Use Retry audio to continue."); return; }
+          pendingRestoreRef.current = { chapter: current.chapter.url, time: audioRef.current?.currentTime ?? 0 };
+          wantPlayRef.current = isPlaying;
+          void attachSource(attachedUrlRef.current || current.playlistUrl);
         }}
         preload="auto"
         playsInline
@@ -1110,7 +1304,7 @@ export default function Player() {
           totalChunks={current?.chunks.length ?? 0}
           isBuffering={isBuffering}
           hasError={!!error}
-          prefetchReady={!!nextPrefetch}
+          prefetchReady={!!current?.sessionId && !!playback.session?.chapters.some((c) => c.chapter.url === current.chapter.nextUrl)}
           onPickChunk={onPickChunk}
           sleep={sleep}
           sleepRemainingMs={sleepRemainingMs}

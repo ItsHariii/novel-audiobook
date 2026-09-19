@@ -121,6 +121,7 @@ export async function fetchNovtales(url: string): Promise<Chapter> {
 
   return {
     url,
+    bookId: row.Novel ? `${ORIGIN}/novel/${row.Novel}` : undefined,
     title: bookTitle || chapterTitle || `Chapter ${chapterNum ?? ""}`.trim(),
     paragraphs,
     nextUrl: nextSlug ? `${ORIGIN}/chapter/${nextSlug}` : null,

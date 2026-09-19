@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cacheKey, getCached } from "@/lib/hls/cache";
 import { normalizeVoice } from "@/lib/tts/voices";
+import { apiError, cloudConfigured, requireUser } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,6 +10,7 @@ export const dynamic = "force-dynamic";
 // segments not synthesized yet (or synthesized on another instance). Only
 // reads the in-memory cache — never fetches the upstream chapter.
 export async function GET(req: NextRequest) {
+  if (cloudConfigured()) { try { await requireUser(req); } catch (e) { return apiError(e); } }
   const url = req.nextUrl.searchParams.get("url");
   if (!url) {
     return NextResponse.json({ ok: false, error: "Missing url parameter" }, { status: 400 });

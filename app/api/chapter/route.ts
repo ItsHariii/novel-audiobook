@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Agent, fetch as undiciFetch } from "undici";
 import { pickAdapter, pickCustomFetcher } from "@/lib/adapters";
+import { apiError, cloudConfigured, requireUser } from "@/lib/supabase/server";
+import { loadChapter } from "@/lib/hls/parse";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,6 +18,15 @@ const USER_AGENT =
 const h2Dispatcher = new Agent({ allowH2: true });
 
 export async function GET(req: NextRequest) {
+  if (cloudConfigured()) {
+    try {
+      await requireUser(req);
+      const url = req.nextUrl.searchParams.get("url");
+      if (!url) return NextResponse.json({ ok: false, error: "Missing url" }, { status: 400 });
+      const { cached } = await loadChapter(url, "en-US-AvaNeural");
+      return NextResponse.json({ ok: true, chapter: cached.chapter }, { headers: { "Cache-Control": "private, no-store" } });
+    } catch (e) { return apiError(e); }
+  }
   const url = req.nextUrl.searchParams.get("url");
   if (!url) {
     return NextResponse.json({ ok: false, error: "Missing url parameter" }, { status: 400 });

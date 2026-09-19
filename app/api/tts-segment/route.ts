@@ -3,6 +3,7 @@ import { MsEdgeTTS, OUTPUT_FORMAT } from "msedge-tts";
 import { ChapterFetchError, loadChapter } from "@/lib/hls/parse";
 import type { CachedSegment } from "@/lib/hls/cache";
 import { normalizeVoice } from "@/lib/tts/voices";
+import { apiError, cloudConfigured, HttpError } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,6 +14,7 @@ const MAX_TEXT_LENGTH = 3000;
 const BYTES_PER_SECOND = 6000;
 
 export async function GET(req: NextRequest) {
+  if (cloudConfigured()) return apiError(new HttpError(410, "Use an authenticated playback session."));
   const url = req.nextUrl.searchParams.get("url");
   const iStr = req.nextUrl.searchParams.get("i");
   if (!url || iStr === null) {

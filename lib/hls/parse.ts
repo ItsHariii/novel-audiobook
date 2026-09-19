@@ -4,11 +4,22 @@ import type { Chapter } from "@/lib/types";
 import { chunkParagraphs } from "@/lib/chunk";
 import { cacheKey, getCached, setCached, type CachedChapter } from "./cache";
 import { estimateDuration } from "./playlist";
+import { publicAddress, publicUrl } from "./public-url";
+import { lookup } from "node:dns";
 
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
 
-const h2Dispatcher = new Agent({ allowH2: true });
+const h2Dispatcher = new Agent({ allowH2: true, connect: {
+  lookup(hostname, options, callback) {
+    lookup(hostname, { ...options, all: true }, (error, addresses) => {
+      if (error) return callback(error, []);
+      if (addresses.some((a) => !publicAddress(a.address))) return callback(new Error("Private network address blocked"), []);
+      if (options.all) callback(null, addresses);
+      else callback(null, addresses[0].address, addresses[0].family);
+    });
+  },
+} });
 
 export class ChapterFetchError extends Error {
   readonly status: number;
@@ -18,10 +29,12 @@ export class ChapterFetchError extends Error {
   }
 }
 
-async function fetchChapterHtml(url: URL): Promise<string> {
+async function fetchChapterHtml(url: URL, redirects = 0): Promise<string> {
   let res: Awaited<ReturnType<typeof undiciFetch>>;
   try {
+    await publicUrl(url);
     res = await undiciFetch(url.toString(), {
+      redirect: "manual",
       dispatcher: h2Dispatcher,
       signal: AbortSignal.timeout(8000),
       headers: {
@@ -34,6 +47,12 @@ async function fetchChapterHtml(url: URL): Promise<string> {
     });
   } catch (err) {
     throw new ChapterFetchError(`Fetch failed: ${(err as Error).message}`, 502);
+  }
+  if ([301, 302, 303, 307, 308].includes(res.status)) {
+    const location = res.headers.get("location");
+    await res.body?.cancel();
+    if (!location || redirects >= 4) throw new ChapterFetchError("Invalid upstream redirect", 502);
+    return fetchChapterHtml(new URL(location, url), redirects + 1);
   }
   if (!res.ok) {
     throw new ChapterFetchError(`Upstream returned ${res.status}`, 502);
@@ -58,6 +77,7 @@ export async function loadChapter(
   if (target.protocol !== "https:" && target.protocol !== "http:") {
     throw new ChapterFetchError("Only http(s) URLs are allowed", 400);
   }
+  await publicUrl(target);
 
   let chapter: Chapter;
   const customFetcher = pickCustomFetcher(target.toString());

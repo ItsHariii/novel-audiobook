@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { MsEdgeTTS, OUTPUT_FORMAT } from "msedge-tts";
 import { normalizeVoice } from "@/lib/tts/voices";
+import { apiError, cloudConfigured, requireUser } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,6 +18,7 @@ function parseBody(body: unknown): { text: string; voice: string } | null {
 }
 
 export async function POST(req: NextRequest) {
+  if (cloudConfigured()) { try { await requireUser(req); } catch (e) { return apiError(e); } }
   let body: unknown;
   try {
     body = await req.json();

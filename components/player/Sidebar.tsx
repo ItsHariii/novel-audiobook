@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
+import { bookKey } from "@/lib/library/types";
 import type { HistoryItem } from "@/components/player/types";
 
 export function Sidebar(props: {
@@ -10,6 +12,7 @@ export function Sidebar(props: {
   chapterLoading: boolean;
   history: HistoryItem[];
   onPickHistory: (url: string) => void;
+  account?: ReactNode;
 }) {
   const {
     inputUrl,
@@ -37,6 +40,7 @@ export function Sidebar(props: {
 
   return (
     <aside className="flex h-full flex-col rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-4">
+      {props.account}
       <form onSubmit={onSubmitUrl} className="mb-5 flex flex-col gap-2">
         <label className="text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--color-muted)]">
           Chapter URL
@@ -82,10 +86,16 @@ export function Sidebar(props: {
                     {group.title}
                   </div>
                   <div className="mt-0.5 text-[11px] text-[var(--color-muted)]">
-                    {group.source} · {group.chapters.length} chapter
-                    {group.chapters.length === 1 ? "" : "s"}
+                    {group.source}
                   </div>
                 </div>
+              </button>
+              <button
+                onClick={() => onPickHistory(group.latest.url)}
+                className="mb-2 ml-7 text-left text-xs text-[var(--color-accent)] hover:underline"
+              >
+                Continue · {group.latest.chapterLabel || group.latest.title}
+                {!!group.latest.audioTime && ` · ${Math.floor(group.latest.audioTime / 60)}:${String(Math.floor(group.latest.audioTime % 60)).padStart(2, "0")}`}
               </button>
               {isOpen && (
                 <div className="mb-1 ml-5 border-l border-[var(--color-border)] pl-2">
@@ -128,6 +138,7 @@ interface BookGroup {
   source: string;
   chapters: HistoryItem[];
   lastAt: number;
+  latest: HistoryItem;
 }
 
 function groupHistoryByBook(history: HistoryItem[]): BookGroup[] {
@@ -137,7 +148,7 @@ function groupHistoryByBook(history: HistoryItem[]): BookGroup[] {
     const existing = byKey.get(key);
     if (existing) {
       existing.chapters.push(item);
-      if (item.lastAt > existing.lastAt) existing.lastAt = item.lastAt;
+      if (item.lastAt > existing.lastAt) { existing.lastAt = item.lastAt; existing.latest = item; }
     } else {
       byKey.set(key, {
         key,
@@ -145,6 +156,7 @@ function groupHistoryByBook(history: HistoryItem[]): BookGroup[] {
         source: item.source,
         chapters: [item],
         lastAt: item.lastAt,
+        latest: item,
       });
     }
   }
@@ -160,11 +172,7 @@ function groupHistoryByBook(history: HistoryItem[]): BookGroup[] {
 
 function deriveBookKey(item: HistoryItem): string {
   try {
-    const u = new URL(item.url);
-    const parts = u.pathname.split("/").filter(Boolean);
-    if (parts.length <= 1) return u.origin + u.pathname;
-    // Drop the final segment (the chapter id) to get the book's parent path.
-    return u.origin + "/" + parts.slice(0, -1).join("/");
+    return bookKey(item);
   } catch {
     return item.source + "::" + (item.bookTitle || item.title);
   }

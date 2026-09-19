@@ -9,6 +9,8 @@ export interface Chunk {
 }
 
 export interface LoadedChapter {
+  sessionId?: string;
+  startOffset?: number;
   chapter: Chapter;
   chunks: Chunk[];
   cumDurations: number[];
@@ -18,6 +20,9 @@ export interface LoadedChapter {
 }
 
 export interface HistoryItem {
+  bookId?: string;
+  audioTime?: number;
+  mode?: ViewMode;
   url: string;
   title: string;
   source: string;

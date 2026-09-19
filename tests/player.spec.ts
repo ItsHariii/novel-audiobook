@@ -1,0 +1,107 @@
+import { test, expect, type Page } from "@playwright/test";
+import { execFileSync } from "node:child_process";
+import { packMp3 } from "../lib/audio/mp3";
+import { eventPlaylist, readyChapters } from "../lib/audio/playlist";
+import type { AudioAsset, PlaybackSession } from "../lib/audio/types";
+import type { ChapterProgress, ProgressRecord } from "../lib/library/types";
+
+const voice = "en-US-AvaNeural";
+const user = { id: "11111111-1111-1111-1111-111111111111", email: "reader@example.com", aud: "authenticated", role: "authenticated", app_metadata: { provider: "email", providers: ["email"] }, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" };
+
+async function mockLibrary(page: Page) {
+  // Deterministic locally generated audio: no TTS or real Supabase credentials.
+  const mp3 = execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=12", "-ar", "24000", "-ac", "1", "-b:a", "48k", "-f", "mp3", "pipe:1"]);
+  const parts = packMp3(mp3);
+  const duration = parts.reduce((n, p) => n + p.duration, 0);
+  const rows = Array.from({ length: 5 }, (_, ordinal) => ({ ordinal, asset: {
+    id: `asset-${ordinal}`, generation: "test", user_id: user.id, voice, bytes: mp3.length,
+    chapter: { url: `https://example.com/novel/chapter-${ordinal + 1}`, bookTitle: "The Quiet Library", title: "The Quiet Library", chapterLabel: `Chapter ${ordinal + 1}`, source: "example.com", paragraphs: ["A quiet room, a shelf of books, and the next chapter."], nextUrl: ordinal < 4 ? `https://example.com/novel/chapter-${ordinal + 2}` : null, prevUrl: null },
+    chunks: ["A quiet room, a shelf of books, and the next chapter."],
+    audio_chunks: [{ chunk_index: 0, duration, bytes: mp3.length, parts: parts.map((p, i) => ({ path: `${i}.mp3`, duration: p.duration })) }],
+  } satisfies AudioAsset }));
+  const session: PlaybackSession = { id: "33333333-3333-3333-3333-333333333333", playlistUrl: "/api/playback-sessions/33333333-3333-3333-3333-333333333333/manifest?token=test", voice, chapters: readyChapters(rows), preparing: false, terminal: true, error: null };
+  const p: ChapterProgress = { chapterUrl: rows[0].asset.chapter.url, bookKey: "https://example.com/novel", title: "The Quiet Library", bookTitle: "The Quiet Library", chapterLabel: "Chapter 1", source: "example.com", mode: "audio", audioTime: 2, voice, readerChunk: 0, readerOffset: 0, wordIndex: 0 };
+  const records = new Map<string, ProgressRecord>([[p.chapterUrl, { chapter_url: p.chapterUrl, book_key: p.bookKey, payload: p, revision: 1, updated_at: new Date().toISOString() }]]);
+  const saved: ChapterProgress[] = [];
+  let sourceCreates = 0;
+  await page.route("http://127.0.0.1:54321/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "*" } });
+    let body: unknown = {};
+    if (url.pathname.endsWith("/token")) {
+      const encode = (v: object) => Buffer.from(JSON.stringify(v)).toString("base64url");
+      const token = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ sub: user.id, exp: Math.floor(Date.now() / 1000) + 3600, role: "authenticated" })}.test`;
+      body = { access_token: token, refresh_token: "test-refresh", expires_in: 3600, token_type: "bearer", user };
+    } else if (url.pathname.endsWith("/user")) body = user;
+    else if (url.pathname.endsWith("/chapter_progress")) body = [...records.values()];
+    else if (url.pathname.endsWith("/save_progress")) {
+      const { p: incoming } = route.request().postDataJSON() as { p: ChapterProgress };
+      saved.push(incoming);
+      const record: ProgressRecord = { chapter_url: incoming.chapterUrl, book_key: incoming.bookKey, payload: incoming, revision: (records.get(incoming.chapterUrl)?.revision ?? 0) + 1, updated_at: new Date().toISOString() };
+      records.set(incoming.chapterUrl, record);
+      body = { accepted: true, record };
+    }
+    await route.fulfill({ json: body, headers: { "access-control-allow-origin": "*" } });
+  });
+  await page.route("**/api/playback-sessions**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/media")) {
+      const part = parts[Number(url.searchParams.get("part"))];
+      return route.fulfill({ contentType: "audio/mpeg", body: part.data });
+    }
+    if (url.pathname.endsWith("/manifest")) return route.fulfill({ contentType: "application/vnd.apple.mpegurl", body: eventPlaylist(session.chapters, rows, session.id, "test", true, Number(url.searchParams.get("stop") || Infinity)) });
+    if (route.request().method() === "POST") sourceCreates++;
+    return route.fulfill({ json: route.request().method() === "PATCH" ? { ok: true } : session });
+  });
+  return { session, saved, sourceCreates: () => sourceCreates };
+}
+
+async function signIn(page: Page) {
+  await page.getByRole("textbox", { name: "Email", exact: true }).fill(user.email);
+  await page.locator('input[name="password"]:visible').fill("test-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+}
+
+test("private library resumes and crosses chapters without reloading its source", async ({ page }) => {
+  await page.addInitScript(() => document.addEventListener("error", (event) => {
+    if (event.target instanceof HTMLMediaElement) console.log("Media diagnostic", event.target.error?.code, event.target.error?.message, event.target.canPlayType("application/vnd.apple.mpegurl"));
+  }, true));
+  page.on("console", (message) => { if (message.text().startsWith("Media diagnostic")) console.log(message.text()); });
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  const mock = await mockLibrary(page);
+  await page.goto("/");
+  await signIn(page);
+  await expect(page.getByRole("button", { name: /Continue · Chapter 1/ })).toBeVisible();
+  await expect(page.locator("main").getByText("Chapter 1", { exact: true })).toBeVisible();
+  const audio = page.locator("audio");
+  await expect.poll(() => audio.evaluate((el: HTMLAudioElement) => el.readyState)).toBeGreaterThan(0);
+  await expect.poll(() => audio.evaluate((el: HTMLAudioElement) => el.currentTime)).toBeCloseTo(2, 0);
+  const src = await audio.getAttribute("src");
+  await page.getByRole("button", { name: "Playback speed: 1.15x" }).click();
+  await page.getByRole("menuitem", { name: "2.5x", exact: true }).click();
+  await page.getByRole("button", { name: "Play", exact: true }).click();
+  for (const chapter of mock.session.chapters.slice(1)) {
+    await expect(page.locator("main").getByText(chapter.chapter.chapterLabel!, { exact: true })).toBeVisible({ timeout: 12_000 });
+    expect(await audio.getAttribute("src")).toBe(src);
+  }
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  expect(mock.sourceCreates()).toBe(1);
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Continue ·/ })).toHaveCount(0);
+  expect(mock.saved.some((p) => p.chapterLabel === "Chapter 5" && p.audioTime < 3)).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test("account controls fit the mobile library", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockLibrary(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: /library/i }).click();
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+  await signIn(page);
+  await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: "test-results/mobile-library.png", fullPage: true });
+});

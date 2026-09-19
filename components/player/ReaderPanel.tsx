@@ -16,6 +16,8 @@ export function ReaderPanel(props: {
   readingMode?: boolean;
   canReachEnd?: boolean;
   onReachedEnd?: () => void;
+  restorePosition?: { chunk: number; offset: number };
+  onPosition?: (position: { chunk: number; offset: number }) => void;
 }) {
   const {
     chunks,
@@ -50,6 +52,17 @@ export function ReaderPanel(props: {
         : false,
     [],
   );
+
+  useEffect(() => {
+    const container = scrollRef.current;
+    const position = props.restorePosition;
+    if (!container || !position) return;
+    const frame = requestAnimationFrame(() => {
+      const node = refs.current[position.chunk];
+      if (node) container.scrollTop += node.getBoundingClientRect().top - container.getBoundingClientRect().top + position.offset * node.offsetHeight;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [props.restorePosition, readingMode]);
 
   // Track whether `chunks` just changed (new chapter loaded). When it has, we
   // jump to the very top of the scroller so the reader starts at the chapter
@@ -189,6 +202,14 @@ export function ReaderPanel(props: {
   return (
     <div
       ref={scrollRef}
+      onScroll={() => {
+        const container = scrollRef.current;
+        if (!container || !readingMode || !props.onPosition) return;
+        const top = container.getBoundingClientRect().top;
+        const index = refs.current.findIndex((node) => node && node.getBoundingClientRect().bottom > top);
+        const node = refs.current[index];
+        if (node) props.onPosition({ chunk: index, offset: Math.max(0, Math.min(1, (top - node.getBoundingClientRect().top) / node.offsetHeight)) });
+      }}
       className={
         readingMode
           ? "relative h-full overflow-y-auto px-4 py-6 sm:px-8 sm:py-8"

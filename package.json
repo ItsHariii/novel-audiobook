@@ -2,27 +2,40 @@
   "name": "novel-audiobook",
   "version": "0.1.0",
   "private": true,
+  "engines": { "node": ">=22" },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "tsc --noEmit --incremental false",
+    "test": "tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit --incremental false",
+    "test:browser": "playwright test"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.116.0",
     "cheerio": "^1.0.0",
     "hls.js": "^1.6.16",
     "msedge-tts": "^2.0.5",
     "next": "^15.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "undici": "^7.25.0"
+    "server-only": "^0.0.1",
+    "undici": "^7.25.0",
+    "zod": "^4.6.5"
+  },
+  "overrides": {
+    "postcss": "^8.5.28"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4.0.0",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "tailwindcss": "^4.0.0",
+    "tsx": "^4.23.13",
     "typescript": "^5.7.0"
   }
 }
