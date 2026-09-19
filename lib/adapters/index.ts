@@ -2,6 +2,7 @@ import type { Chapter } from "../types";
 import { parseGeneric } from "./generic";
 import { parseSkyDemonOrder } from "./skydemonorder";
 import { parseMaehwasup } from "./maehwasup";
+import { parseAmethystWriters } from "./amethystwriters";
 import { fetchNovtales } from "./novtales";
 
 type HtmlAdapter = (html: string, url: string) => Chapter;
@@ -10,6 +11,7 @@ type CustomFetcher = (url: string) => Promise<Chapter>;
 const htmlAdapters: Record<string, HtmlAdapter> = {
   "skydemonorder.com": parseSkyDemonOrder,
   "maehwasup.com": parseMaehwasup,
+  "amethystwriters.com": parseAmethystWriters,
 };
 
 // Sites whose chapter body is rendered client-side (e.g. Bubble.io SPAs) can't
