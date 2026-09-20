@@ -73,13 +73,19 @@ export function usePlaybackSession() {
     } finally { if (generation === generationRef.current) setPreparing(false); }
   }, [close, refresh]);
 
+  // Poll regardless of visibility. Background timers are throttled heavily, but
+  // a phone that wakes for a moment still needs to notice newly prepared
+  // chapters: gating this on `visible` meant a locked device could never pick
+  // them up, so playback that ran off the end of the attached playlist stayed
+  // dead until the screen came back on.
   useEffect(() => {
     if (!session?.id || preparing) return;
-    const sync = () => { if (document.visibilityState === "visible") void refresh().catch((e) => setError(e.message)); };
+    const sync = () => { void refresh().catch((e) => setError(e.message)); };
     const interval = setInterval(sync, 5000);
-    document.addEventListener("visibilitychange", sync);
+    const onVisible = () => { if (document.visibilityState === "visible") sync(); };
+    document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("online", sync);
-    return () => { clearInterval(interval); document.removeEventListener("visibilitychange", sync); window.removeEventListener("online", sync); };
+    return () => { clearInterval(interval); document.removeEventListener("visibilitychange", onVisible); window.removeEventListener("online", sync); };
   }, [session?.id, preparing, refresh]);
 
   const atTime = useCallback((time: number) => {

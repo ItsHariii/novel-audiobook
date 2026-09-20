@@ -14,25 +14,26 @@ export function readyChapters(rows: Array<{ ordinal: number; asset: AudioAsset }
   return chapters;
 }
 
-// A closed playlist over every chapter prepared so far. #EXT-X-ENDLIST is
-// always present, even while later chapters are still being prepared: without
-// it iOS treats the stream as live, which means no duration on the lock screen
-// and a re-download of the whole (100 KB+) playlist every half target
-// duration for as long as playback lasts. A single one of those reloads
-// failing on a locked phone kills the native player outright. Newly prepared
-// chapters are picked up by re-reading this playlist at the end of the
-// attached one, not by growing it underneath the player.
+// Closed playlist over every chapter prepared so far. #EXT-X-ENDLIST is always
+// present (even while later chapters are still preparing) so iOS treats the
+// stream as finite: real duration on the lock screen, no re-download of the
+// whole playlist every few seconds. Newly prepared chapters are picked up by
+// re-attaching at the end of this playlist, not by growing it underneath the
+// player.
+//
+// No #EXT-X-DISCONTINUITY: the media route rewrites each segment's ID3
+// timestamp onto a session-absolute timeline, and every TTS chunk shares the
+// same encoding (24 kHz / 48 kbps / mono MPEG-2 Layer III), so AVPlayer can
+// keep one decoder across chunk boundaries. Declaring PLAYLIST-TYPE:VOD is
+// avoided because the playlist does grow between loads as chapters finish.
 export function eventPlaylist(chapters: SessionChapter[], rows: Array<{ ordinal: number; asset: AudioAsset }>, sessionId: string, token: string, stopAt = Infinity) {
   const body: string[] = [];
-  let first = true;
   let elapsed = 0;
   let longest = 0;
   audio: for (const chapter of chapters) {
     const asset = rows.find((r) => r.ordinal === chapter.ordinal)!.asset;
     for (const chunk of asset.audio_chunks.toSorted((a, b) => a.chunk_index - b.chunk_index)) {
       if (elapsed >= stopAt - 0.001) break audio;
-      if (!first) body.push("#EXT-X-DISCONTINUITY");
-      first = false;
       for (const [index, part] of chunk.parts.entries()) {
         if (elapsed >= stopAt - 0.001) break audio;
         body.push(`#EXTINF:${part.duration.toFixed(6)},`, `/api/playback-sessions/${sessionId}/media?chapter=${chapter.ordinal}&chunk=${chunk.chunk_index}&part=${index}&token=${encodeURIComponent(token)}`);
@@ -41,7 +42,7 @@ export function eventPlaylist(chapters: SessionChapter[], rows: Array<{ ordinal:
       }
     }
   }
-  const lines = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-PLAYLIST-TYPE:VOD",
+  const lines = ["#EXTM3U", "#EXT-X-VERSION:3",
     `#EXT-X-TARGETDURATION:${Math.max(1, Math.ceil(longest))}`, "#EXT-X-MEDIA-SEQUENCE:0",
     "#EXT-X-START:TIME-OFFSET=0,PRECISE=YES", ...body, "#EXT-X-ENDLIST"];
   return lines.join("\n") + "\n";

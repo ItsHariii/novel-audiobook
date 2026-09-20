@@ -2,18 +2,32 @@
 // MPEG audio header rules: ISO/IEC 11172-3 / 13818-3, HLS RFC 8216 §3.4.
 const MPEG1_BITRATES = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
 const MPEG2_BITRATES = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+const TIMESTAMP_OWNER = Buffer.from("com.apple.streaming.transportStreamTimestamp\0");
 
 function syncSafe(n: number) {
   return Buffer.from([(n >>> 21) & 127, (n >>> 14) & 127, (n >>> 7) & 127, n & 127]);
 }
 
+function ptsUnits(seconds: number) {
+  return BigInt(Math.round(seconds * 90000)) % (1n << 33n);
+}
+
 export function timestampTag(seconds: number): Buffer {
-  const owner = Buffer.from("com.apple.streaming.transportStreamTimestamp\0");
   const timestamp = Buffer.alloc(8);
-  timestamp.writeBigUInt64BE(BigInt(Math.round(seconds * 90000)) % (1n << 33n));
-  const body = Buffer.concat([owner, timestamp]);
+  timestamp.writeBigUInt64BE(ptsUnits(seconds));
+  const body = Buffer.concat([TIMESTAMP_OWNER, timestamp]);
   const frame = Buffer.concat([Buffer.from("PRIV"), syncSafe(body.length), Buffer.alloc(2), body]);
   return Buffer.concat([Buffer.from([0x49, 0x44, 0x33, 4, 0, 0]), syncSafe(frame.length), frame]);
+}
+
+// Rewrite the Apple HLS ID3 PRIV timestamp in place. Segments are packed per
+// TTS chunk with a chunk-local clock; the media route patches them to a
+// session-absolute timeline so the playlist needs no discontinuities.
+export function retimestamp(buffer: Buffer, seconds: number): Buffer {
+  const i = buffer.indexOf(TIMESTAMP_OWNER);
+  if (i < 0) throw new Error("Missing HLS timestamp tag");
+  buffer.writeBigUInt64BE(ptsUnits(seconds), i + TIMESTAMP_OWNER.length);
+  return buffer;
 }
 
 export function packMp3(input: Buffer): Array<{ data: Buffer; duration: number }> {

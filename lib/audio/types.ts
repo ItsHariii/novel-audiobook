@@ -1,5 +1,12 @@
 import type { Chapter } from "@/lib/types";
 
+// How many chapters past the one currently being streamed stay prepared.
+// `requested_ordinal` only advances when a segment of a later chapter is
+// fetched, so this is the unplayed runway. It has to outlast a locked phone:
+// JavaScript is frozen there, so if playback reaches the end of the attached
+// playlist nothing can re-attach until the screen comes back on.
+export const LOOKAHEAD = 4;
+
 export interface AudioPart { path: string; duration: number }
 export interface AudioChunk { chunk_index: number; duration: number; bytes: number; parts: AudioPart[] }
 export interface AudioAsset {

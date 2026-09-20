@@ -1,7 +1,7 @@
 import "server-only";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { adminSupabase, check, HttpError } from "@/lib/supabase/server";
-import type { AudioAsset, PlaybackSession, SessionRow } from "./types";
+import { LOOKAHEAD, type AudioAsset, type PlaybackSession, type SessionRow } from "./types";
 import { readyChapters } from "./playlist";
 
 export const BUCKET = "chapter-audio";
@@ -47,7 +47,7 @@ export async function extendSession(session: SessionRow) {
   const nextUrl = last.asset.chapter.nextUrl;
   if (!nextUrl || rows.some((r) => r.asset.chapter.url === nextUrl)) {
     check(await adminSupabase().from("playback_sessions").update({ terminal: true }).eq("id", session.id));
-  } else if (last.ordinal < session.requested_ordinal + 2) {
+  } else if (last.ordinal < session.requested_ordinal + LOOKAHEAD) {
     await enqueue(`prepare:${session.id}:${last.ordinal + 1}`, session.id, "prepare", { url: nextUrl, ordinal: last.ordinal + 1 });
   }
 }

@@ -1,5 +1,6 @@
 import { adminSupabase, apiError, check, HttpError } from "@/lib/supabase/server";
 import { BUCKET, extendSession, getSession } from "@/lib/audio/server";
+import { retimestamp } from "@/lib/audio/mp3";
 import type { AudioChunk } from "@/lib/audio/types";
 
 export const runtime = "nodejs";
@@ -22,9 +23,40 @@ export async function GET(req: Request, context: { params: Promise<{ id: string 
       check(await db.rpc("audio_demand", { sid: session.id, ordinal }));
       await extendSession({ ...session, requested_ordinal: ordinal });
     }
-    const signed = check(await db.storage.from(BUCKET).createSignedUrl(part.path, 3600));
-    if (!signed) throw new HttpError(503, "Audio storage is unavailable");
-    // The native HLS engine follows this redirect with Range headers as needed.
-    return new Response(null, { status: 307, headers: { Location: signed.signedUrl, "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer" } });
+
+    // Session-absolute start of this segment — same accumulation as eventPlaylist.
+    let offset = 0;
+    if (ordinal > 0) {
+      const prior = check(await db.from("session_chapters")
+        .select("audio_assets(audio_chunks(duration))")
+        .eq("session_id", session.id)
+        .lt("ordinal", ordinal)) ?? [];
+      for (const row of prior) {
+        const joined = row.audio_assets as unknown;
+        const asset = (Array.isArray(joined) ? joined[0] : joined) as { audio_chunks: Array<{ duration: number }> } | null;
+        if (asset?.audio_chunks) offset += asset.audio_chunks.reduce((sum, c) => sum + c.duration, 0);
+      }
+    }
+    if (chunkIndex > 0) {
+      const priorChunks = check(await db.from("audio_chunks")
+        .select("duration")
+        .eq("asset_id", chapter.asset_id)
+        .lt("chunk_index", chunkIndex)) ?? [];
+      offset += priorChunks.reduce((sum, c) => sum + c.duration, 0);
+    }
+    for (let i = 0; i < partIndex; i++) offset += chunk!.parts[i].duration;
+
+    const blob = check(await db.storage.from(BUCKET).download(part.path));
+    if (!blob) throw new HttpError(503, "Audio storage is unavailable");
+    const buffer = retimestamp(Buffer.from(await blob.arrayBuffer()), offset);
+    return new Response(new Uint8Array(buffer), {
+      status: 200,
+      headers: {
+        "Content-Type": "audio/mpeg",
+        "Content-Length": String(buffer.length),
+        "Cache-Control": "private, no-store",
+        "Referrer-Policy": "no-referrer",
+      },
+    });
   } catch (error) { return apiError(error); }
 }
