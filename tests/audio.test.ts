@@ -37,24 +37,35 @@ function asset(id: string): AudioAsset {
     chunks: ["a", "b"], audio_chunks: [0, 1].map((i) => ({ chunk_index: i, bytes: 100, duration: 12, parts: [{ path: `${i}/0`, duration: 6 }, { path: `${i}/1`, duration: 6 }] })) };
 }
 
-test("an EVENT playlist only appends complete chapters with stable URLs and timing", () => {
+test("a session playlist only appends complete chapters with stable URLs and timing", () => {
   const first = [{ ordinal: 0, asset: asset("a") }];
   const partial = asset("b"); partial.audio_chunks.pop();
   assert.equal(readyChapters([...first, { ordinal: 1, asset: partial }]).length, 1);
   const all = [...first, { ordinal: 1, asset: asset("b") }, { ordinal: 2, asset: asset("c") }];
-  const before = eventPlaylist(readyChapters(first), first, "session", "token", false);
-  const after = eventPlaylist(readyChapters(all), all, "session", "token", false);
-  assert.ok(after.startsWith(before));
-  assert.equal(after.includes("#EXT-X-ENDLIST"), false);
+  const before = eventPlaylist(readyChapters(first), first, "session", "token");
+  const after = eventPlaylist(readyChapters(all), all, "session", "token");
+  const segments = (playlist: string) => playlist.replace(/#EXT-X-ENDLIST\n$/, "");
+  assert.ok(after.startsWith(segments(before)));
   assert.equal(chapterAtTime(readyChapters(all), 55)?.chapter.title, "c");
   assert.equal(chapterAtTime(readyChapters(all), 24)?.chapter.title, "b");
   assert.equal(readyChapters(all)[2].start, 48);
-  assert.ok(eventPlaylist(readyChapters(all), all, "session", "token", true).endsWith("#EXT-X-ENDLIST\n"));
+});
+
+// A playlist iOS considers open is reported as live: no duration for the lock
+// screen, and the whole playlist re-downloaded every few seconds for as long as
+// playback lasts. Later chapters are picked up by re-reading it instead.
+test("a session playlist is always closed and declares its real target duration", () => {
+  const rows = [{ ordinal: 0, asset: asset("a") }];
+  rows[0].asset.audio_chunks[0].parts[0].duration = 6.5;
+  const playlist = eventPlaylist(readyChapters(rows), rows, "session", "token");
+  assert.ok(playlist.endsWith("#EXT-X-ENDLIST\n"));
+  assert.ok(playlist.includes("#EXT-X-TARGETDURATION:7"));
+  assert.equal(playlist.includes("#EXT-X-PLAYLIST-TYPE:VOD"), true);
 });
 
 test("sleep playlists stop at a native media boundary without JavaScript", () => {
   const rows = [{ ordinal: 0, asset: asset("a") }, { ordinal: 1, asset: asset("b") }];
-  const playlist = eventPlaylist(readyChapters(rows), rows, "s", "t", false, 24);
+  const playlist = eventPlaylist(readyChapters(rows), rows, "s", "t", 24);
   assert.ok(playlist.endsWith("#EXT-X-ENDLIST\n"));
   assert.equal(playlist.includes("chapter=1"), false);
   assert.equal((playlist.match(/EXTINF/g) ?? []).length, 4);

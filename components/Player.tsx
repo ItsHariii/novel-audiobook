@@ -56,6 +56,10 @@ const LS_WPM = "nab:wpm";
 const LS_RSVP_PREFIX = "nab:rsvp:";
 
 const DEFAULT_WPM = 400;
+// How long the element may claim to be playing without its clock advancing
+// before we treat the native player as dead. Longer than one segment (6s) so an
+// ordinary rebuffer is not mistaken for a stall.
+const STALL_TIMEOUT_MS = 10_000;
 
 type Theme = "dark" | "light";
 
@@ -152,6 +156,7 @@ export default function Player() {
   const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
+  const [stalled, setStalled] = useState(false);
   const [voice, setVoice] = useState<string>(VOICES[0].id);
   const [playbackRate, setPlaybackRate] = useState<number>(1.15);
   const [readerFontSize, setReaderFontSize] = useState(18);
@@ -196,6 +201,9 @@ export default function Player() {
   // (JS suspended). When JS resumes, `timeupdate`/`ended` can both observe an
   // overshoot — this ref ensures we only transition once per crossing.
   const transitioningRef = useRef(false);
+  const positionSyncedAtRef = useRef(0);
+  const reattachedAtRef = useRef(0);
+  const continuingRef = useRef(false);
 
   useEffect(() => {
     const savedUrl = localStorage.getItem(LS_URL);
@@ -323,6 +331,25 @@ export default function Player() {
     setSleep(null);
     setSleepRemainingMs(0);
   }, []);
+
+  // Publish chapter-relative timing to the OS. A prepared session plays one
+  // playlist covering several chapters, so the element's own duration is the
+  // whole prepared run; iOS only shows an elapsed/remaining readout on the
+  // lock screen and in Control Center if we report the chapter's bounds
+  // ourselves. iOS extrapolates between calls, so the rate has to be included.
+  const syncPositionState = useCallback(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    const media = navigator.mediaSession;
+    if (typeof media.setPositionState !== "function") return;
+    const a = audioRef.current;
+    if (!a || !current || current.audioPending || !timing) return;
+    const duration = timing.totalDuration;
+    if (!Number.isFinite(duration) || duration <= 0) return;
+    const position = Math.max(0, Math.min(duration, a.currentTime - (current.startOffset ?? 0)));
+    try {
+      media.setPositionState({ duration, position, playbackRate: a.playbackRate || 1 });
+    } catch {}
+  }, [current, timing]);
 
   const fetchChapterMeta = useCallback(
     async (url: string, requestedVoice: string, signal?: AbortSignal): Promise<LoadedChapter> => {
@@ -598,8 +625,11 @@ export default function Player() {
     return () => ac.abort();
   }, [current, nextPrefetch, fetchChapterMeta, voice, library.enabled]);
 
-  // Restore saved position once chapter is attached + metadata loaded.
-  const pendingRestoreRef = useRef<{ chapter: string; time: number } | null>(null);
+  // Restore saved position once chapter is attached + metadata loaded. A
+  // prepared session is one playlist spanning several chapters, so its pending
+  // time is absolute on that session's timeline and stays valid whichever
+  // chapter happens to be current when the metadata arrives.
+  const pendingRestoreRef = useRef<{ chapter: string; time: number; sessionId?: string } | null>(null);
   useEffect(() => {
     const audio = audioRef.current;
     if (!current?.sessionId || !audio || chapterLoading || !timing) return;
@@ -616,7 +646,7 @@ export default function Player() {
       url += `&stop=${stop}`;
     } else cloudSleepRef.current = null;
     if (url === attachedUrlRef.current) return;
-    pendingRestoreRef.current = { chapter: current.chapter.url, time: audio.currentTime };
+    pendingRestoreRef.current = { chapter: current.chapter.url, time: audio.currentTime, sessionId: current.sessionId };
     wantPlayRef.current = !audio.paused;
     void attachSource(url);
   }, [sleep, playbackRate, current, timing, currentChunkIndex, chapterLoading, attachSource]);
@@ -677,6 +707,44 @@ export default function Player() {
     };
   }, [current, isPlaying]);
 
+  // Re-attach the playlist at the position we had reached. iOS reports nothing
+  // at all when its native HLS engine gives up mid-stream on a locked phone —
+  // no `error`, no `ended`, and `paused` stays false — so re-attaching is the
+  // only way back short of relaunching the app.
+  const recoverPlayback = useCallback(async () => {
+    const a = audioRef.current;
+    if (!a || !current || current.audioPending || chapterLoading) return;
+    const url = attachedUrlRef.current || current.playlistUrl;
+    if (!url) return;
+    reattachedAtRef.current = Date.now();
+    pendingRestoreRef.current = { chapter: current.chapter.url, time: a.currentTime, sessionId: current.sessionId };
+    wantPlayRef.current = true;
+    setStalled(false);
+    await attachSource(url);
+  }, [current, chapterLoading, attachSource]);
+
+  // A prepared playlist is closed at whatever was ready when we attached it, so
+  // `ended` also fires when the session has since run further ahead. Re-read the
+  // playlist and carry on from the same point when later chapters have landed.
+  const continuePreparedSession = useCallback(async () => {
+    const a = audioRef.current;
+    if (!a || !current?.sessionId || continuingRef.current) return false;
+    continuingRef.current = true;
+    try {
+      const reached = a.currentTime;
+      const updated = await playback.refresh().catch(() => null);
+      const last = updated?.chapters.at(-1);
+      if (!last || last.start + last.duration <= reached + 0.5) return false;
+      reattachedAtRef.current = Date.now();
+      pendingRestoreRef.current = { chapter: current.chapter.url, time: reached, sessionId: current.sessionId };
+      wantPlayRef.current = true;
+      await attachSource(attachedUrlRef.current || current.playlistUrl);
+      return true;
+    } finally {
+      continuingRef.current = false;
+    }
+  }, [current, attachSource, playback.refresh]);
+
   // Auto-advance to next chapter on end.
   const onEnded = useCallback(() => {
     if (!current || current.audioPending || chapterLoading) return;
@@ -685,7 +753,13 @@ export default function Player() {
     if (current.sessionId) {
       wantPlayRef.current = false;
       setIsPlaying(false);
-      setSleep(null);
+      // A sleep timer truncates the playlist, so reaching its end means the
+      // timer fired rather than that we ran out of prepared audio.
+      if (sleep) {
+        setSleep(null);
+        return;
+      }
+      void continuePreparedSession();
       return;
     }
     if (sleep?.kind === "chapter") {
@@ -711,11 +785,17 @@ export default function Player() {
       return;
     }
     setIsPlaying(false);
-  }, [current, timing, sleep, loadChapterFromUrl, nextPrefetch, crossoverToNext, library.flush, chapterLoading]);
+  }, [current, timing, sleep, loadChapterFromUrl, nextPrefetch, crossoverToNext, library.flush, chapterLoading, continuePreparedSession]);
 
   const togglePlay = useCallback(async () => {
     const a = audioRef.current;
     if (!a || !current || current.audioPending) return;
+    // A stalled element is not paused, so without this the Play button would
+    // pause a stream that has already stopped making sound.
+    if (stalled && !a.paused) {
+      await recoverPlayback();
+      return;
+    }
     if (a.paused) {
       try {
         await a.play();
@@ -727,14 +807,15 @@ export default function Player() {
       a.pause();
       setIsPlaying(false);
     }
-  }, [current]);
+  }, [current, stalled, recoverPlayback]);
 
   const seekAbsolute = useCallback((t: number) => {
     const a = audioRef.current;
     if (!a || current?.audioPending) return;
     a.currentTime = (current?.startOffset ?? 0) + Math.max(0, t);
     captureRef.current();
-  }, [current?.startOffset, current?.audioPending]);
+    syncPositionState();
+  }, [current?.startOffset, current?.audioPending, syncPositionState]);
 
   const seekSeconds = useCallback(
     (delta: number) => {
@@ -775,7 +856,12 @@ export default function Player() {
       artist: current.chapter.bookTitle || current.chapter.source,
       album: "Tome",
     });
-    navigator.mediaSession.setActionHandler("play", () => { if (!current.audioPending) void audioRef.current?.play(); });
+    navigator.mediaSession.setActionHandler("play", () => {
+      if (current.audioPending) return;
+      const a = audioRef.current;
+      if (stalled && a && !a.paused) { void recoverPlayback(); return; }
+      void a?.play();
+    });
     navigator.mediaSession.setActionHandler("pause", () => { wantPlayRef.current = false; audioRef.current?.pause(); });
     navigator.mediaSession.setActionHandler("nexttrack", goNextChapter);
     navigator.mediaSession.setActionHandler("previoustrack", goPrevChapter);
@@ -791,12 +877,13 @@ export default function Player() {
       navigator.mediaSession.setActionHandler("seekforward", null);
       navigator.mediaSession.setActionHandler("seekto", null);
     };
-  }, [current, togglePlay, goPrevChapter, goNextChapter, seekSeconds, seekAbsolute]);
+  }, [current, togglePlay, goPrevChapter, goNextChapter, seekSeconds, seekAbsolute, stalled, recoverPlayback]);
 
   useEffect(() => {
     if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
     navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
-  }, [isPlaying]);
+    syncPositionState();
+  }, [isPlaying, playbackRate, syncPositionState]);
 
   // Save chapter-relative time even after multiple background transitions.
   useEffect(() => {
@@ -849,17 +936,19 @@ export default function Player() {
     a.playbackRate = playbackRate;
     (a as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = true;
     const pending = pendingRestoreRef.current;
-    if (pending && pending.chapter === current.chapter.url) {
+    if (pending && (pending.chapter === current.chapter.url
+      || (!!pending.sessionId && pending.sessionId === current.sessionId))) {
       try {
         a.currentTime = pending.time;
       } catch {}
       pendingRestoreRef.current = null;
     }
+    syncPositionState();
     if (wantPlayRef.current) {
       wantPlayRef.current = false;
       a.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
     }
-  }, [current, playbackRate, chapterLoading]);
+  }, [current, playbackRate, chapterLoading, syncPositionState]);
 
   const onTimeUpdate = useCallback(() => {
     const a = audioRef.current;
@@ -889,6 +978,12 @@ export default function Player() {
     const idx = findChunkAtTime(activeTiming.cumDurations, t);
     setChunkPosition(t - activeTiming.cumDurations[idx]);
     setChunkDuration(activeTiming.durations[idx] ?? 0);
+    // `timeupdate` fires several times a second; the OS only needs an anchor it
+    // can extrapolate from.
+    if (Date.now() - positionSyncedAtRef.current > 1000) {
+      positionSyncedAtRef.current = Date.now();
+      syncPositionState();
+    }
     if (idx !== currentChunkIndex) {
       setCurrentChunkIndex(idx);
       // Sleep "chunk" mode: pause as soon as the chunk we armed on finishes.
@@ -901,11 +996,56 @@ export default function Player() {
         }
       }
     }
-  }, [current, timing, currentChunkIndex, sleep, nextPrefetch, crossoverToNext, playback.atTime, pushHistory, library.flush]);
+  }, [current, timing, currentChunkIndex, sleep, nextPrefetch, crossoverToNext, playback.atTime, pushHistory, library.flush, syncPositionState]);
 
   useEffect(() => {
-    if (current?.sessionId) onTimeUpdate();
-  }, [playback.session?.chapters.length, onTimeUpdate, current?.sessionId]);
+    if (!current?.sessionId) return;
+    onTimeUpdate();
+    // We stopped at the end of the prepared run and the session has since
+    // prepared more. Re-attach now: calling play() on an ended element would
+    // restart the whole run from the beginning.
+    if (audioRef.current?.ended) void continuePreparedSession();
+  }, [playback.session?.chapters.length, onTimeUpdate, current?.sessionId, continuePreparedSession]);
+
+  // Stall watchdog. Timers are frozen while the phone is locked, so the first
+  // tick after the app comes back is what matters: if the element still claims
+  // to be playing but its clock has not moved, the native player died while we
+  // were suspended and only a re-attach will bring the audio back.
+  const progressRef = useRef({ time: -1, at: 0 });
+  useEffect(() => {
+    if (!isPlaying || !current || current.audioPending || chapterLoading) {
+      setStalled(false);
+      return;
+    }
+    progressRef.current = { time: audioRef.current?.currentTime ?? -1, at: Date.now() };
+    const inspect = () => {
+      const a = audioRef.current;
+      if (!a || a.paused || a.ended) return;
+      // Give a re-attach time to land, but never longer: if it silently fails
+      // to produce audio the watchdog has to be free to try again.
+      if (Date.now() - reattachedAtRef.current < STALL_TIMEOUT_MS) return;
+      const seen = progressRef.current;
+      if (a.currentTime > seen.time + 0.05) {
+        progressRef.current = { time: a.currentTime, at: Date.now() };
+        // Sustained progress means earlier hiccups are behind us; otherwise a
+        // long listen eventually exhausts the retry budget and gives up.
+        recoveryAttemptsRef.current = 0;
+        setStalled(false);
+        return;
+      }
+      if (Date.now() - seen.at < STALL_TIMEOUT_MS) return;
+      progressRef.current = { time: a.currentTime, at: Date.now() };
+      setStalled(true);
+      void recoverPlayback();
+    };
+    const id = window.setInterval(inspect, 2000);
+    const onVisible = () => { if (document.visibilityState === "visible") inspect(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [isPlaying, current, chapterLoading, recoverPlayback]);
 
   // Double-tap brings header back when hidden.
   useEffect(() => {
@@ -1301,7 +1441,7 @@ export default function Player() {
           setIsBuffering(false);
           if (!current || current.audioPending || !attachedUrlRef.current) return;
           if (++recoveryAttemptsRef.current > 3) { setError("Playback interrupted. Use Retry audio to continue."); return; }
-          pendingRestoreRef.current = { chapter: current.chapter.url, time: audioRef.current?.currentTime ?? 0 };
+          pendingRestoreRef.current = { chapter: current.chapter.url, time: audioRef.current?.currentTime ?? 0, sessionId: current.sessionId };
           wantPlayRef.current = isPlaying;
           void attachSource(attachedUrlRef.current || current.playlistUrl);
         }}

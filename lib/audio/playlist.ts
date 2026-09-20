@@ -14,23 +14,35 @@ export function readyChapters(rows: Array<{ ordinal: number; asset: AudioAsset }
   return chapters;
 }
 
-export function eventPlaylist(chapters: SessionChapter[], rows: Array<{ ordinal: number; asset: AudioAsset }>, sessionId: string, token: string, terminal: boolean, stopAt = Infinity) {
-  const lines = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-PLAYLIST-TYPE:EVENT", "#EXT-X-TARGETDURATION:6", "#EXT-X-MEDIA-SEQUENCE:0", "#EXT-X-START:TIME-OFFSET=0,PRECISE=YES"];
+// A closed playlist over every chapter prepared so far. #EXT-X-ENDLIST is
+// always present, even while later chapters are still being prepared: without
+// it iOS treats the stream as live, which means no duration on the lock screen
+// and a re-download of the whole (100 KB+) playlist every half target
+// duration for as long as playback lasts. A single one of those reloads
+// failing on a locked phone kills the native player outright. Newly prepared
+// chapters are picked up by re-reading this playlist at the end of the
+// attached one, not by growing it underneath the player.
+export function eventPlaylist(chapters: SessionChapter[], rows: Array<{ ordinal: number; asset: AudioAsset }>, sessionId: string, token: string, stopAt = Infinity) {
+  const body: string[] = [];
   let first = true;
   let elapsed = 0;
+  let longest = 0;
   audio: for (const chapter of chapters) {
     const asset = rows.find((r) => r.ordinal === chapter.ordinal)!.asset;
     for (const chunk of asset.audio_chunks.toSorted((a, b) => a.chunk_index - b.chunk_index)) {
       if (elapsed >= stopAt - 0.001) break audio;
-      if (!first) lines.push("#EXT-X-DISCONTINUITY");
+      if (!first) body.push("#EXT-X-DISCONTINUITY");
       first = false;
       for (const [index, part] of chunk.parts.entries()) {
         if (elapsed >= stopAt - 0.001) break audio;
-        lines.push(`#EXTINF:${part.duration.toFixed(6)},`, `/api/playback-sessions/${sessionId}/media?chapter=${chapter.ordinal}&chunk=${chunk.chunk_index}&part=${index}&token=${encodeURIComponent(token)}`);
+        body.push(`#EXTINF:${part.duration.toFixed(6)},`, `/api/playback-sessions/${sessionId}/media?chapter=${chapter.ordinal}&chunk=${chunk.chunk_index}&part=${index}&token=${encodeURIComponent(token)}`);
         elapsed += part.duration;
+        longest = Math.max(longest, part.duration);
       }
     }
   }
-  if (terminal || elapsed >= stopAt - 0.001) lines.push("#EXT-X-ENDLIST");
+  const lines = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-PLAYLIST-TYPE:VOD",
+    `#EXT-X-TARGETDURATION:${Math.max(1, Math.ceil(longest))}`, "#EXT-X-MEDIA-SEQUENCE:0",
+    "#EXT-X-START:TIME-OFFSET=0,PRECISE=YES", ...body, "#EXT-X-ENDLIST"];
   return lines.join("\n") + "\n";
 }

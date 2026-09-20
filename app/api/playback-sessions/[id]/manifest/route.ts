@@ -16,7 +16,7 @@ export async function GET(req: Request, context: { params: Promise<{ id: string 
     const stop = new URL(req.url).searchParams.get("stop");
     const stopAt = stop === null ? Infinity : Number(stop);
     if (!(stopAt > 0)) throw new HttpError(400, "Invalid stop position");
-    return new Response(eventPlaylist(chapters, rows, session.id, token, session.terminal && chapters.length === rows.length, stopAt),
+    return new Response(eventPlaylist(chapters, rows, session.id, token, stopAt),
       { headers: { "Content-Type": "application/vnd.apple.mpegurl", "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer" } });
   } catch (error) { return apiError(error); }
 }

@@ -55,7 +55,7 @@ async function mockLibrary(page: Page, options: { audio?: "ready" | "pending" | 
       const part = parts[Number(url.searchParams.get("part"))];
       return route.fulfill({ contentType: "audio/mpeg", body: part.data });
     }
-    if (url.pathname.endsWith("/manifest")) return route.fulfill({ contentType: "application/vnd.apple.mpegurl", body: eventPlaylist(session.chapters, rows, session.id, "test", true, Number(url.searchParams.get("stop") || Infinity)) });
+    if (url.pathname.endsWith("/manifest")) return route.fulfill({ contentType: "application/vnd.apple.mpegurl", body: eventPlaylist(session.chapters, rows, session.id, "test", Number(url.searchParams.get("stop") || Infinity)) });
     if (route.request().method() === "POST") sourceCreates++;
     return route.fulfill({ json: route.request().method() === "PATCH" ? { ok: true } : audioState === "ready" ? session : {
       ...session, chapters: [], preparing: true, terminal: false,
