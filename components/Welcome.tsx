@@ -7,28 +7,21 @@ function Arrow() {
   return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M4 12h15M13 5l7 7-7 7" /></svg>;
 }
 
-function BookArtwork() {
+function ReaderPreview() {
   return <div className={styles.artwork} aria-hidden="true">
-    <div className={styles.orbit} />
-    <div className={styles.bookBack}><span>ONE MORE CHAPTER</span></div>
-    <div className={styles.book}>
-      <div className={styles.bookTop}>THE TOME COLLECTION <span>01</span></div>
-      <div className={styles.bookTitle}>Somewhere<br />between<br /><em>the pages.</em></div>
-      <svg className={styles.landscape} viewBox="0 0 280 210" fill="none">
-        <circle cx="171" cy="59" r="34" fill="#d6b573" />
-        <path d="M0 153 97 48l113 162H0Z" fill="#647866" />
-        <path d="m99 210 109-117 72 71v46Z" fill="#aab397" />
-        <path d="M0 181q73-27 140 1t140-2v30H0Z" fill="#d8d0ac" />
-        <path d="M160 210q-55-14-18-28t-9-22" stroke="#f0e4c5" strokeWidth="3" />
-      </svg>
-      <div className={styles.bookBottom}>A WORLD WAITING TO BE HEARD</div>
+    <div className={styles.previewHeader}>
+      <span>YOUR NEXT CHAPTER</span>
+      <div className={styles.previewModes}><span>Reader</span><span>Audio</span></div>
     </div>
-    <div className={styles.listeningNote}>
-      <span className={styles.soundWave}>{[10, 20, 30, 17, 26, 12, 22].map((height, i) => <i key={i} style={{ height }} />)}</span>
-      <span>Your next escape.<small>Just press play.</small></span>
+    <div className={styles.previewPage}>
+      <p className={styles.previewTitle}>A world waiting to be heard.</p>
+      <p>Somewhere between the pages, the rest of the world grew quiet. There was only the story, and what came next.</p>
+    </div>
+    <div className={styles.previewPlayer}>
       <span className={styles.notePlay}>▶</span>
+      <div className={styles.previewTrack}><span>One more chapter<small>At your own pace</small></span><div className={styles.progress}><span /></div></div>
+      <span className={styles.soundWave}>{[10, 20, 30, 17, 26, 12, 22].map((height, i) => <i key={i} style={{ height }} />)}</span>
     </div>
-    <span className={styles.artworkCaption}>FOR THE LOVE OF A GOOD STORY</span>
   </div>;
 }
 
@@ -60,23 +53,25 @@ export function Welcome({ ready, accountEnabled, onSignIn, onStart }: {
   return <main className={styles.welcome}>
     <section className={styles.story} aria-labelledby="welcome-title">
       <a className={styles.brand} href="/" aria-label="Tome home">
-        <svg width="29" height="30" viewBox="0 0 30 30" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d="M15 7C11 4 6 4 2 5v20c5-1 9-1 13 2 4-3 8-3 13-2V5c-4-1-9-1-13 2Zm0 0v20" /><path d="M6 10c2 0 4 .3 6 1M6 15c2 0 4 .3 6 1m6-5c2-.7 4-1 6-1m-6 6c2-.7 4-1 6-1" /></svg>
-        <span>tome<span className={styles.brandDot}>.</span></span>
+        {/* Use the same theme-specific logo as the player header. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/logo.png" alt="" width="44" height="44" className={styles.darkLogo} />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/logo-light.png" alt="" width="44" height="44" className={styles.lightLogo} />
+        <span>Tome</span>
       </a>
       <div className={styles.storyIntro}>
         <p className={styles.eyebrow}>A QUIETER WAY TO GET LOST</p>
         <h1 id="welcome-title">Good stories.<br /><em>Open ears.</em></h1>
         <p className={styles.storyDescription}>Turn your favorite web novels into your next great listen. A little escape, wherever life takes you.</p>
       </div>
-      <BookArtwork />
+      <ReaderPreview />
       <div className={styles.storyFooter}><span>Made for your next chapter.</span><span>READ. LISTEN. WANDER.</span></div>
     </section>
 
     <section className={styles.entry} aria-labelledby="signin-title">
-      <div className={styles.entryTop}><span>YOUR PERSONAL READING ROOM</span><span className={styles.spark}>✳</span></div>
       <div className={styles.entryContent}>
-        <div className={styles.smallRule} />
-        <p className={styles.entryEyebrow}>SETTLE IN. STAY A WHILE.</p>
+        <p className={styles.entryEyebrow}>YOUR PERSONAL LIBRARY</p>
         <h2 id="signin-title">{accountEnabled ? "Welcome back." : "Your story starts here."}</h2>
         <p className={styles.entryDescription}>{accountEnabled ? "Your library, your place, your next chapter. Sign in and pick up where you left off." : "Bring a chapter link. Find your favorite voice. Let the story take it from there."}</p>
 

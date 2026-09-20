@@ -135,7 +135,10 @@ test("welcome handles sign-in errors and password visibility", async ({ page }) 
     await page.setViewportSize({ width, height: 900 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   }
-  await page.screenshot({ path: "test-results/desktop-welcome.png", fullPage: true });
+  for (const theme of ["dark", "light"]) {
+    await page.evaluate((value) => document.documentElement.setAttribute("data-theme", value), theme);
+    await page.screenshot({ path: `test-results/desktop-welcome-${theme}.png`, fullPage: true, animations: "disabled" });
+  }
   const password = page.getByLabel("Password", { exact: true });
   await password.fill("test-password");
   await page.getByRole("button", { name: "Show password" }).click();
