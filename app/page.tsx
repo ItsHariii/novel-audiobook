@@ -1,10 +1,10 @@
-import Player from "@/components/Player";
+import HomeExperience from "@/components/HomeExperience";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 export default function Home() {
   return (
     <ErrorBoundary>
-      <Player />
+      <HomeExperience />
     </ErrorBoundary>
   );
 }

@@ -108,16 +108,54 @@ test("private library resumes and crosses chapters without reloading its source"
   expect(errors).toEqual([]);
 });
 
-test("account controls fit the mobile library", async ({ page }) => {
+test("full-screen sign-in leads to the mobile library", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await mockLibrary(page);
   await page.goto("/");
-  await page.getByRole("button", { name: /library/i }).click();
+  await expect(page.getByRole("heading", { name: "Good stories. Open ears." })).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: "test-results/mobile-welcome.png", fullPage: true });
   await signIn(page);
+  await page.getByRole("button", { name: /library/i }).click();
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: "test-results/mobile-library.png", fullPage: true });
+});
+
+test("welcome handles sign-in errors and password visibility", async ({ page }) => {
+  await page.route("http://127.0.0.1:54321/**", async (route) => {
+    if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "*" } });
+    return route.fulfill({ status: 400, json: { code: "invalid_credentials", message: "Invalid login credentials" }, headers: { "access-control-allow-origin": "*" } });
+  });
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Welcome back." })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Library", exact: true })).toHaveCount(0);
+  for (const width of [320, 768, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  }
+  await page.screenshot({ path: "test-results/desktop-welcome.png", fullPage: true });
+  const password = page.getByLabel("Password", { exact: true });
+  await password.fill("test-password");
+  await page.getByRole("button", { name: "Show password" }).click();
+  await expect(password).toHaveAttribute("type", "text");
+  await expect(password).toHaveValue("test-password");
+  await page.getByRole("button", { name: "Hide password" }).click();
+  await expect(password).toHaveAttribute("type", "password");
+  await signIn(page);
+  await expect(page.locator("form").getByRole("alert")).toHaveText("Invalid login credentials");
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeEnabled();
+});
+
+test("a saved session opens the library directly", async ({ page }) => {
+  await mockLibrary(page);
+  await page.goto("/");
+  await signIn(page);
+  await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Welcome back." })).toHaveCount(0);
 });
 
 test("text remains readable through audio preparation, failure and retry", async ({ page }) => {
