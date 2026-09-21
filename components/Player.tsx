@@ -1485,6 +1485,7 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
               ) : undefined}
               onPick={(url) => pickHistory(url)}
               onResume={resume}
+              onRead={(url) => pickHistory(url, { surface: "reader" })}
               playing={audioState === "playing"}
               onPause={pause}
               onRemove={(book) => void removeBook(book)}
@@ -1617,7 +1618,7 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
       </main>
 
       {nowPlaying && (!surface || surfaceLeaving) && (
-        <div className="animate-tome-enter-up fixed inset-x-2.5 bottom-[calc(76px+env(safe-area-inset-bottom,0px))] z-30 lg:bottom-5 lg:left-[calc(88px+1.25rem)] lg:right-5">
+        <div className="animate-tome-enter-up fixed inset-x-2.5 bottom-[calc(78px+env(safe-area-inset-bottom,0px))] z-30 lg:bottom-5 lg:left-[calc(88px+1.25rem)] lg:right-5">
           <div className="mx-auto max-w-[680px]">
             <MiniPlayer
               nowPlaying={nowPlaying}

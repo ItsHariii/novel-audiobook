@@ -18,24 +18,24 @@ function NavButton(props: { label: string; icon: ReactNode; active: boolean; onC
       type="button"
       onClick={props.onClick}
       aria-current={props.active ? "page" : undefined}
-      className={`flex flex-col items-center gap-[5px] rounded-2xl transition ${props.rail ? "w-16 py-2.5 hover:bg-[var(--color-hover)]" : "py-1"} ${
+      aria-label={props.label}
+      title={props.label}
+      className={`grid place-items-center rounded-2xl transition ${props.rail ? "h-12 w-16 hover:bg-[var(--color-hover)]" : "h-11 w-full"} ${
         props.active ? "text-[var(--color-accent-text)]" : "text-[var(--color-dim)] hover:text-[var(--color-text)]"
       }`}
     >
       {props.icon}
-      <span className="text-[10.5px] font-semibold leading-none">{props.label}</span>
     </button>
   );
 }
 
 function AddButton(props: { onClick: () => void; rail?: boolean }) {
   return (
-    <button type="button" onClick={props.onClick} aria-label="Add a novel"
-      className={`flex flex-col items-center gap-[5px] ${props.rail ? "w-16 py-1" : ""}`}>
+    <button type="button" onClick={props.onClick} aria-label="Add a novel" title="Add a novel"
+      className={`grid place-items-center ${props.rail ? "w-16 py-1" : ""}`}>
       <span className="grid h-[38px] w-[50px] place-items-center rounded-xl bg-[var(--color-accent)] text-[var(--color-on-accent)] shadow-[0_6px_18px_-6px_color-mix(in_srgb,var(--color-accent)_70%,transparent)]">
         <PlusIcon size={21} />
       </span>
-      <span className="text-[10.5px] font-semibold leading-none text-[var(--color-muted)]">Add</span>
     </button>
   );
 }
@@ -44,8 +44,8 @@ function AddButton(props: { onClick: () => void; rail?: boolean }) {
 export function BottomNav(props: { tab: Tab | null; onTab: (tab: Tab) => void; onAdd: () => void }) {
   const [home, library, search, you] = ITEMS;
   return (
-    <nav aria-label="Main" className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-[var(--color-border)] bg-[var(--color-nav)] backdrop-blur-xl lg:hidden">
-      <div className="grid h-[68px] grid-cols-5 items-center px-1.5">
+    <nav aria-label="Main" className="fixed inset-x-0 bottom-0 z-30 border-t border-[var(--color-border)] bg-[var(--color-nav)] pb-[calc(env(safe-area-inset-bottom,0px)+12px)] backdrop-blur-xl lg:hidden">
+      <div className="grid h-[58px] grid-cols-5 items-center px-1.5">
         {[home, library].map((i) => <NavButton key={i.tab} {...i} active={props.tab === i.tab} onClick={() => props.onTab(i.tab)} />)}
         <AddButton onClick={props.onAdd} />
         {[search, you].map((i) => <NavButton key={i.tab} {...i} active={props.tab === i.tab} onClick={() => props.onTab(i.tab)} />)}

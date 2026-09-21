@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Cover } from "@/components/ui/Cover";
-import { ChevronDownIcon, EqBars, PauseIcon, PlayIcon, TrashIcon } from "@/components/ui/icons";
+import { BookIcon, ChevronDownIcon, EqBars, PauseIcon, PlayIcon, TrashIcon } from "@/components/ui/icons";
 import { Chip, StatusLine, type Status } from "@/components/ui/primitives";
 import { EmptyState } from "@/components/player/EmptyState";
 import { formatClock, shortChapter, splitChapterTitle, type BookGroup } from "@/lib/library/group";
@@ -17,6 +17,7 @@ export function LibraryScreen(props: {
   banner?: ReactNode;
   onPick: (url: string) => void;
   onResume: (url: string) => void;
+  onRead: (url: string) => void;
   playing: boolean;
   onPause: () => void;
   onRemove: (book: BookGroup) => void;
@@ -90,6 +91,10 @@ export function LibraryScreen(props: {
                     confirming === book.key ? "bg-[var(--color-failed-soft)] text-[var(--color-failed)]" : "text-[var(--color-dim)] hover:bg-[var(--color-failed-soft)] hover:text-[var(--color-failed)]"
                   }`}>
                   <TrashIcon size={18} />
+                </button>
+                <button type="button" onClick={() => props.onRead(book.latest.url)} aria-label={`Read · ${continueLabel}`} title="Read"
+                  className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-[var(--color-muted)] transition hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] active:scale-95">
+                  <BookIcon size={17} />
                 </button>
                 {isCurrent && props.playing ? (
                   <button type="button" onClick={props.onPause} aria-label="Pause" title="Pause"

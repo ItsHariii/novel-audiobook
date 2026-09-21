@@ -74,8 +74,8 @@ export function HomeScreen(props: {
                 <PlayIcon size={17} />{heroIsCurrent ? "Play" : "Resume"}
               </Button>
             )}
-            <Button variant="secondary" className="w-12 px-0" onClick={() => props.onRead(heroItem.url)} aria-label="Read this chapter instead" title="Read this chapter">
-              <BookIcon size={19} />
+            <Button variant="secondary" className="flex-1" onClick={() => props.onRead(heroItem.url)} aria-label={`Read · ${heroItem.chapterLabel || heroItem.title}`}>
+              <BookIcon size={17} />Read
             </Button>
           </div>
         </section>
