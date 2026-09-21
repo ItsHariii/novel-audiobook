@@ -87,7 +87,7 @@ export function ReaderScreen(props: {
       />
 
       {/* Hairline progress shows while chrome is away. */}
-      <div aria-hidden className={`pointer-events-none absolute inset-x-0 top-0 h-[2px] transition-opacity ${chromeHidden ? "opacity-100" : "opacity-0"}`}>
+      <div aria-hidden className={`pointer-events-none absolute inset-x-0 bottom-[env(safe-area-inset-bottom,0px)] h-[2px] transition-opacity ${chromeHidden ? "opacity-100" : "opacity-0"}`}>
         <div className="h-full bg-[var(--color-accent)]" style={{ width: `${progress * 100}%` }} />
       </div>
 
