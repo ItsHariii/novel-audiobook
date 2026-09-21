@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { acknowledge } from "../lib/library/local";
+import { groupHistoryByBook } from "../lib/library/group";
 import { bookKey, type ChapterProgress, type ProgressRecord } from "../lib/library/types";
 import {
   cleanBookTitle,
@@ -117,4 +118,21 @@ test("titleFromUrl skips date and chapter segments", () => {
     titleFromUrl("https://example.com/novel/return-of-the-mount-hua/chapter-10"),
     "Return Of The Mount Hua",
   );
+});
+
+test("title variants of one book on one site share a library entry and its cover", () => {
+  const item = (url: string, bookTitle: string, lastAt: number, coverUrl?: string) =>
+    ({ url, title: bookTitle, bookTitle, source: new URL(url).hostname, coverSeed: bookTitle, lastAt, coverUrl });
+  const groups = groupHistoryByBook([
+    item("https://maehwasup.com/2026/09/20/chapter-1971/", "Return of the Mount Hua", 2),
+    item("https://maehwasup.com/2026/09/21/chapter-1972/", "Return of the Mount Hua Sect", 1, "/api/cover-image?src=x"),
+    item("https://maehwasup.com/2026/01/01/chapter-1/", "Solo Leveling", 3),
+    item("https://maehwasup.com/2026/01/02/chapter-1/", "Solo Leveling 2", 4),
+    item("https://other.com/novel/return/chapter-1", "Return of the Mount Hua Sect Extra", 0),
+  ]);
+  const hua = groups.find((g) => g.title === "Return of the Mount Hua Sect");
+  assert.equal(hua?.chapters.length, 2);
+  assert.equal(hua?.coverUrl, "/api/cover-image?src=x");
+  assert.equal(hua?.latest.url, "https://maehwasup.com/2026/09/20/chapter-1971/");
+  assert.equal(groups.length, 4);
 });

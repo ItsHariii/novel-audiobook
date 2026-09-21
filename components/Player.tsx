@@ -18,7 +18,7 @@ import type { AudioState, NarrationSummary, NowPlaying } from "@/components/scre
 import { MiniPlayer } from "@/components/shell/MiniPlayer";
 import { BottomNav, NavRail, type Tab } from "@/components/shell/Nav";
 import { AlertIcon } from "@/components/ui/icons";
-import { groupHistoryByBook } from "@/lib/library/group";
+import { groupHistoryByBook, type BookGroup } from "@/lib/library/group";
 import { useTheme } from "@/lib/theme";
 import type { useLibrary } from "@/lib/library/useLibrary";
 import { useTitleRepair } from "@/lib/library/useTitleRepair";
@@ -1244,7 +1244,24 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
   const books = useMemo(() => groupHistoryByBook(libraryHistory), [libraryHistory]);
   const currentBook = current ? books.find((b) => b.chapters.some((c) => c.url === current.chapter.url)) : undefined;
 
+  const [surfaceLeaving, setSurfaceLeaving] = useState(false);
+  const leaveTimerRef = useRef<number | null>(null);
   const openSurface = useCallback((next: "reader" | "player" | null) => {
+    if (leaveTimerRef.current !== null) {
+      window.clearTimeout(leaveTimerRef.current);
+      leaveTimerRef.current = null;
+    }
+    if (next === null) {
+      // Let the surface animate out before it unmounts.
+      setSurfaceLeaving(true);
+      leaveTimerRef.current = window.setTimeout(() => {
+        leaveTimerRef.current = null;
+        setSurfaceLeaving(false);
+        setSurface(null);
+      }, 190);
+      return;
+    }
+    setSurfaceLeaving(false);
     setSurface(next);
     if (next === "reader") setViewMode("reader");
     else if (next === "player") setViewMode("audio");
@@ -1274,6 +1291,17 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
     void loadChapterFromUrl(url, !!options.play, saved?.voice);
   };
 
+  // Play buttons on Home and Library: the open chapter just starts playing
+  // where it is; anything else loads and opens the player.
+  const resume = (url: string) => {
+    if (current?.chapter.url === url && !chapterLoading) {
+      if (current.audioPending || playback.error) openSurface("reader");
+      else if (!isPlaying) void togglePlay();
+      return;
+    }
+    pickHistory(url, { play: true, surface: "player" });
+  };
+
   const retryAudio = async () => {
     setError(null);
     if (playback.session) await authorizedFetch(`/api/playback-sessions/${playback.session.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "retry" }) });
@@ -1294,6 +1322,32 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
     wantPlayRef.current = false;
     audioRef.current?.pause();
     setIsPlaying(false);
+  };
+
+  const removeBook = async (book: BookGroup) => {
+    const urls = book.chapters.map((c) => c.url);
+    if (current && urls.includes(current.chapter.url)) {
+      // Stop saving this chapter before anything else, or the next capture
+      // would put it straight back.
+      captureRef.current = () => {};
+      abortRef.current?.abort();
+      wantPlayRef.current = false;
+      audioRef.current?.pause();
+      detachHls();
+      audioRef.current?.removeAttribute("src");
+      audioRef.current?.load();
+      setCurrent(null); setIsPlaying(false); setChapterLoading(false); setSleep(null);
+      if (library.enabled) void playback.close();
+      try { if (urls.includes(localStorage.getItem(LS_URL) ?? "")) localStorage.removeItem(LS_URL); } catch {}
+    }
+    try {
+      for (const url of urls) {
+        localStorage.removeItem(LS_POSITION_PREFIX + url);
+        localStorage.removeItem(`nab:reader:${url}`);
+      }
+    } catch {}
+    setHistory((prev) => prev.filter((h) => !urls.includes(h.url)));
+    if (library.enabled) await library.remove(urls);
   };
 
   const signOut = async () => {
@@ -1394,17 +1448,19 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
 
   return (
     <div className="min-h-dvh bg-[var(--color-bg)]">
-      <NavRail tab={surface ? null : tab} onTab={goTab} onAdd={() => setAddOpen(true)} theme={theme.resolved} />
+      <NavRail tab={surface && !surfaceLeaving ? null : tab} onTab={goTab} onAdd={() => setAddOpen(true)} theme={theme.resolved} />
 
       <main className="lg:pl-[88px]">
-        <div inert={!!surface} aria-hidden={surface ? true : undefined}
-          className="pt-safe mx-auto w-full max-w-[720px] px-5 pb-[172px] pt-6 lg:px-10 lg:pb-32 lg:pt-12">
+        <div key={tab} inert={!!surface} aria-hidden={surface ? true : undefined}
+          className="animate-tome-fade pt-safe mx-auto w-full max-w-[720px] px-5 pb-[172px] pt-6 lg:px-10 lg:pb-32 lg:pt-12">
           {tab === "home" && (
             <HomeScreen
               books={books}
               nowPlaying={nowPlaying}
               narration={narration}
-              onResume={(url) => pickHistory(url, { play: true, surface: "player" })}
+              playing={audioState === "playing"}
+              onPause={pause}
+              onResume={resume}
               onRead={(url) => pickHistory(url, { surface: "reader" })}
               onAdd={() => setAddOpen(true)}
               onOpenLibrary={() => goTab("library")}
@@ -1428,7 +1484,10 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
                 </div>
               ) : undefined}
               onPick={(url) => pickHistory(url)}
-              onResume={(url) => pickHistory(url, { play: true, surface: "player" })}
+              onResume={resume}
+              playing={audioState === "playing"}
+              onPause={pause}
+              onRemove={(book) => void removeBook(book)}
               onAdd={() => setAddOpen(true)}
             />
           )}
@@ -1478,7 +1537,11 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
         </div>
 
         {surface && (
-          <div className="fixed inset-0 z-40 bg-[var(--color-bg)] lg:left-[88px]">
+          <div key={surface} className={`fixed inset-0 z-40 bg-[var(--color-bg)] lg:left-[88px] ${
+            surface === "player"
+              ? surfaceLeaving ? "animate-tome-leave-down" : "animate-tome-enter-up"
+              : surfaceLeaving ? "animate-tome-leave-side" : "animate-tome-enter-side"
+          }`}>
             {chapterLoading || !current ? (
               <div className="pt-safe h-full overflow-y-auto">
                 <div className="flex h-14 items-center px-2">
@@ -1553,8 +1616,8 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
         )}
       </main>
 
-      {nowPlaying && !surface && (
-        <div className="fixed inset-x-2.5 bottom-[calc(76px+env(safe-area-inset-bottom,0px))] z-30 lg:bottom-5 lg:left-[calc(88px+1.25rem)] lg:right-5">
+      {nowPlaying && (!surface || surfaceLeaving) && (
+        <div className="animate-tome-enter-up fixed inset-x-2.5 bottom-[calc(76px+env(safe-area-inset-bottom,0px))] z-30 lg:bottom-5 lg:left-[calc(88px+1.25rem)] lg:right-5">
           <div className="mx-auto max-w-[680px]">
             <MiniPlayer
               nowPlaying={nowPlaying}
@@ -1570,7 +1633,7 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
         </div>
       )}
 
-      {!surface && <BottomNav tab={tab} onTab={goTab} onAdd={() => setAddOpen(true)} />}
+      {(!surface || surfaceLeaving) && <BottomNav tab={tab} onTab={goTab} onAdd={() => setAddOpen(true)} />}
 
       {showToast && <Toast message={error!} onClose={() => setError(null)} />}
 

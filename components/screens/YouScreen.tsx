@@ -38,7 +38,7 @@ export function YouScreen(props: {
   const [signingOut, setSigningOut] = useState(false);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="tome-stagger flex flex-col gap-6">
       <h1 className="font-serif text-[26px] font-medium leading-[1.15] tracking-[-0.01em] lg:text-[32px]">You</h1>
 
       <section className="rounded-[20px] border border-[var(--color-border)] bg-[var(--color-panel)] p-4">
@@ -170,7 +170,7 @@ function Disclosure({ title, children }: { title: string; children: ReactNode })
         {title}
         <ChevronDownIcon size={17} className={`text-[var(--color-dim)] transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
-      {open && <div className="px-4 pb-4">{children}</div>}
+      {open && <div className="animate-tome-fade px-4 pb-4">{children}</div>}
     </div>
   );
 }

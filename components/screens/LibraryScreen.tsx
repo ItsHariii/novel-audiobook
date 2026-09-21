@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Cover } from "@/components/ui/Cover";
-import { ChevronDownIcon, PlayIcon } from "@/components/ui/icons";
+import { ChevronDownIcon, EqBars, PauseIcon, PlayIcon, TrashIcon } from "@/components/ui/icons";
 import { Chip, StatusLine, type Status } from "@/components/ui/primitives";
 import { EmptyState } from "@/components/player/EmptyState";
 import { formatClock, shortChapter, splitChapterTitle, type BookGroup } from "@/lib/library/group";
@@ -17,10 +17,14 @@ export function LibraryScreen(props: {
   banner?: ReactNode;
   onPick: (url: string) => void;
   onResume: (url: string) => void;
+  playing: boolean;
+  onPause: () => void;
+  onRemove: (book: BookGroup) => void;
   onAdd: () => void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [confirming, setConfirming] = useState<string | null>(null);
 
   useEffect(() => {
     if (props.focusKey) setExpanded((prev) => ({ ...prev, [props.focusKey!]: true }));
@@ -49,13 +53,14 @@ export function LibraryScreen(props: {
         <p className="rounded-2xl border border-dashed border-[var(--color-border-strong)] p-5 text-sm text-[var(--color-muted)]">Nothing here yet.</p>
       )}
       <ul className="flex flex-col gap-2">
-        {books.map((book) => {
+        {books.map((book, index) => {
           const isCurrent = !!props.currentUrl && book.chapters.some((c) => c.url === props.currentUrl);
           const open = !!expanded[book.key];
           const continueLabel = book.latest.chapterLabel || book.latest.title;
           const sources = book.sources.length === 1 ? book.sources[0] : `${book.sources[0]} +${book.sources.length - 1}`;
           return (
-            <li key={book.key} id={`book-${book.key}`} className="rounded-[18px] border border-[var(--color-border)] bg-[var(--color-panel)]">
+            <li key={book.key} id={`book-${book.key}`} style={{ animationDelay: `${Math.min(index, 8) * 35}ms` }}
+              className="animate-tome-fade rounded-[18px] border border-[var(--color-border)] bg-[var(--color-panel)] transition-colors hover:border-[var(--color-border-strong)]">
               <div className="flex gap-3.5 p-3">
                 <button type="button" onClick={() => setExpanded((p) => ({ ...p, [book.key]: !open }))} aria-expanded={open}
                   aria-label={`${book.title}: ${open ? "hide" : "show"} chapters`} className="flex min-w-0 flex-1 gap-3.5 text-left">
@@ -68,7 +73,8 @@ export function LibraryScreen(props: {
                       </p>
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1">
-                      {isCurrent && props.currentStatus && <StatusLine status={props.currentStatus.status}>{props.currentStatus.label}</StatusLine>}
+                      {isCurrent && props.playing && <span className="mr-0.5"><EqBars /></span>}
+                      {isCurrent && props.currentStatus && <StatusLine status={props.currentStatus.status}>{props.playing ? "Now playing" : props.currentStatus.label}</StatusLine>}
                       <span className="text-[11.5px] font-medium text-[var(--color-dim)]">
                         {isCurrent && props.currentStatus ? "· " : ""}{shortChapter(book.latest)}
                         {!!book.latest.audioTime && ` · ${formatClock(book.latest.audioTime)}`}
@@ -77,13 +83,21 @@ export function LibraryScreen(props: {
                     </div>
                   </div>
                 </button>
-                <button type="button" onClick={() => props.onResume(book.latest.url)} aria-label={`Continue · ${continueLabel}`} title="Continue"
-                  className="grid h-11 w-11 shrink-0 place-items-center self-center rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent-text)] transition hover:brightness-110">
-                  <PlayIcon size={16} />
-                </button>
+                {isCurrent && props.playing ? (
+                  <button type="button" onClick={props.onPause} aria-label="Pause" title="Pause"
+                    className="grid h-11 w-11 shrink-0 place-items-center self-center rounded-full bg-[var(--color-accent)] text-[var(--color-on-accent)] transition active:scale-95">
+                    <PauseIcon size={16} />
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => props.onResume(book.latest.url)} aria-label={`Continue · ${continueLabel}`} title="Continue"
+                    className="grid h-11 w-11 shrink-0 place-items-center self-center rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent-text)] transition hover:brightness-110 active:scale-95">
+                    <PlayIcon size={16} />
+                  </button>
+                )}
               </div>
               {open && (
-                <ol className="border-t border-[var(--color-border)] px-2 py-2">
+                <div className="animate-tome-fade border-t border-[var(--color-border)]">
+                <ol className="px-2 py-2">
                   {book.chapters.map((item) => {
                     const { badge, label } = splitChapterTitle(item.chapterLabel || item.title);
                     const active = item.url === props.currentUrl;
@@ -102,6 +116,25 @@ export function LibraryScreen(props: {
                     );
                   })}
                 </ol>
+                <div className="flex items-center justify-end gap-2 border-t border-[var(--color-border)] px-3 py-2.5">
+                  {confirming === book.key ? (
+                    <>
+                      <span className="mr-auto text-[12.5px] text-[var(--color-muted)]">
+                        Remove {book.chapters.length === 1 ? "this chapter" : `all ${book.chapters.length} chapters`} and your place?
+                      </span>
+                      <button type="button" onClick={() => setConfirming(null)}
+                        className="h-10 rounded-xl px-3 text-[13px] font-semibold text-[var(--color-muted)] hover:bg-[var(--color-hover)]">Cancel</button>
+                      <button type="button" onClick={() => { setConfirming(null); props.onRemove(book); }}
+                        className="h-10 rounded-xl bg-[var(--color-failed)] px-3.5 text-[13px] font-semibold text-[var(--color-bg)]">Remove</button>
+                    </>
+                  ) : (
+                    <button type="button" onClick={() => setConfirming(book.key)} aria-label={`Remove ${book.title} from library`}
+                      className="inline-flex h-10 items-center gap-1.5 rounded-xl px-3 text-[13px] font-semibold text-[var(--color-failed)] hover:bg-[var(--color-failed-soft)]">
+                      <TrashIcon size={16} />Remove from library
+                    </button>
+                  )}
+                </div>
+                </div>
               )}
             </li>
           );

@@ -59,6 +59,7 @@ export const RetryIcon = (p: IconProps) => <Stroke {...p}><path d="M20 11a8 8 0 
 export const TypeIcon = (p: IconProps) => <Stroke {...p}><path d="M4 18 9 6l5 12M5.8 14h6.4" /><path d="M15 18l3-7 3 7M15.9 16h4.2" /></Stroke>;
 export const ArrowRightIcon = (p: IconProps) => <Stroke strokeWidth={1.8} {...p}><path d="M4 12h15M13 5l7 7-7 7" /></Stroke>;
 export const SunIcon = (p: IconProps) => <Stroke strokeWidth={1.6} {...p}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" /></Stroke>;
+export const TrashIcon = (p: IconProps) => <Stroke {...p}><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" /></Stroke>;
 export const SystemIcon = (p: IconProps) => <Stroke strokeWidth={1.6} {...p}><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></Stroke>;
 
 export function EqBars({ playing = true }: { playing?: boolean }) {

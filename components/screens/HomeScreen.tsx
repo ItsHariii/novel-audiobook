@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Cover } from "@/components/ui/Cover";
-import { BookIcon, PlayIcon } from "@/components/ui/icons";
+import { BookIcon, EqBars, PauseIcon, PlayIcon } from "@/components/ui/icons";
 import { Button, ProgressBar, SectionTitle } from "@/components/ui/primitives";
 import { EmptyState } from "@/components/player/EmptyState";
 import { formatClock, shortChapter, splitChapterTitle, type BookGroup } from "@/lib/library/group";
@@ -19,6 +19,8 @@ export function HomeScreen(props: {
   books: BookGroup[];
   nowPlaying: NowPlaying | null;
   narration: NarrationSummary | null;
+  playing: boolean;
+  onPause: () => void;
   onResume: (url: string) => void;
   onRead: (url: string) => void;
   onAdd: () => void;
@@ -29,10 +31,11 @@ export function HomeScreen(props: {
 
   const [hero, ...rest] = props.books;
   const heroIsCurrent = !!hero && !!props.nowPlaying && hero.chapters.some((c) => c.url === props.nowPlaying!.url);
+  const heroPlaying = heroIsCurrent && props.playing;
   const heroItem = heroIsCurrent ? { ...hero.latest, url: props.nowPlaying!.url, chapterLabel: props.nowPlaying!.chapterLabel, title: props.nowPlaying!.title } : hero?.latest;
 
   return (
-    <div className="flex flex-col gap-7">
+    <div className="tome-stagger flex flex-col gap-7">
       <header>
         <p className="mb-1.5 min-h-3 text-xs text-[var(--color-dim)]">{eyebrow}</p>
         <h1 className="font-serif text-[26px] font-medium leading-[1.15] tracking-[-0.01em] lg:text-[32px]">
@@ -45,15 +48,15 @@ export function HomeScreen(props: {
       {hero && heroItem && (
         <section
           aria-label="Continue listening"
-          className="rounded-3xl border border-[var(--color-border-strong)] p-[18px]"
+          className="rounded-3xl border border-[var(--color-border-strong)] p-[18px] transition-shadow duration-300 hover:shadow-[0_20px_40px_-24px_var(--color-shadow)]"
           style={{ background: "linear-gradient(150deg, color-mix(in srgb, var(--color-accent) 16%, var(--color-panel)) 0%, var(--color-panel) 65%)" }}
         >
           <div className="flex gap-4">
             <Cover size="lg" title={hero.title} seed={hero.coverSeed} byline={hero.sources[0]} src={hero.coverUrl} />
             <div className="flex min-w-0 flex-1 flex-col justify-between">
               <div>
-                <span className="inline-flex h-6 items-center rounded-full bg-[var(--color-accent-soft)] px-2.5 text-[10.5px] font-semibold tracking-[0.04em] text-[var(--color-accent-text)]">
-                  CONTINUE {heroItem.mode === "reader" ? "READING" : "LISTENING"}
+                <span className="inline-flex h-6 items-center gap-2 rounded-full bg-[var(--color-accent-soft)] px-2.5 text-[10.5px] font-semibold tracking-[0.04em] text-[var(--color-accent-text)]">
+                  {heroPlaying ? <><EqBars />NOW PLAYING</> : `CONTINUE ${heroItem.mode === "reader" ? "READING" : "LISTENING"}`}
                 </span>
                 <p className="mt-2.5 truncate font-serif text-[17px] font-medium leading-snug">{hero.title}</p>
                 <p className="mt-0.5 truncate text-[13px] text-[var(--color-muted)]">{chapterLine(heroItem.chapterLabel || heroItem.title)}</p>
@@ -62,9 +65,15 @@ export function HomeScreen(props: {
             </div>
           </div>
           <div className="mt-4 flex gap-2.5">
-            <Button className="flex-1" onClick={() => props.onResume(heroItem.url)} aria-label={`Continue · ${heroItem.chapterLabel || heroItem.title}`}>
-              <PlayIcon size={17} />Resume
-            </Button>
+            {heroPlaying ? (
+              <Button className="flex-1" onClick={props.onPause}>
+                <PauseIcon size={17} />Pause
+              </Button>
+            ) : (
+              <Button className="flex-1" onClick={() => props.onResume(heroItem.url)} aria-label={`Continue · ${heroItem.chapterLabel || heroItem.title}`}>
+                <PlayIcon size={17} />{heroIsCurrent ? "Play" : "Resume"}
+              </Button>
+            )}
             <Button variant="secondary" className="w-12 px-0" onClick={() => props.onRead(heroItem.url)} aria-label="Read this chapter instead" title="Read this chapter">
               <BookIcon size={19} />
             </Button>
@@ -79,7 +88,7 @@ export function HomeScreen(props: {
           </SectionTitle>
           <div className="no-scrollbar -mx-5 flex gap-3 overflow-x-auto px-5 lg:mx-0 lg:px-0">
             {rest.slice(0, 12).map((book) => (
-              <button key={book.key} type="button" onClick={() => props.onResume(book.latest.url)} className="w-[104px] shrink-0 text-left"
+              <button key={book.key} type="button" onClick={() => props.onResume(book.latest.url)} className="tome-press w-[104px] shrink-0 text-left hover:-translate-y-0.5"
                 aria-label={`${book.title}, ${shortChapter(book.latest)}`}>
                 <Cover size="md" title={book.title} seed={book.coverSeed} byline={book.sources[0]} src={book.coverUrl} />
                 <p className="mt-2 truncate text-[11.5px] font-medium text-[var(--color-muted)]">{shortChapter(book.latest)}</p>

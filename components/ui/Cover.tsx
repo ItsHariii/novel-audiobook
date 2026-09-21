@@ -49,6 +49,7 @@ export function Cover(props: {
   className?: string;
 }) {
   const [failed, setFailed] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState<string | null>(null);
   const size = SIZES[props.size];
   const showImage = !!props.src && failed !== props.src;
   return (
@@ -66,8 +67,9 @@ export function Cover(props: {
           alt=""
           loading="lazy"
           decoding="async"
+          onLoad={() => setLoaded(props.src ?? null)}
           onError={() => setFailed(props.src ?? null)}
-          className="absolute inset-0 h-full w-full object-cover"
+          className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-500 ${loaded === props.src ? "opacity-100" : "opacity-0"}`}
         />
       )}
     </div>

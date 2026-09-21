@@ -132,7 +132,7 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section>
       <h2 className="eyebrow mb-2 mt-2 truncate">{title}</h2>
-      <ul className="flex flex-col">{children}</ul>
+      <ul className="tome-stagger flex flex-col">{children}</ul>
     </section>
   );
 }

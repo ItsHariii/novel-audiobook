@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { browserSupabase } from "@/lib/supabase/browser";
+import { authorizedFetch, browserSupabase } from "@/lib/supabase/browser";
 import { normalizeMode, type HistoryItem } from "@/components/player/types";
 import { acknowledge, type ProgressMap, writeLegacyPosition } from "./local";
 import { bookKey, type ChapterProgress, type ProgressRecord } from "./types";
@@ -23,6 +23,9 @@ export function useLibrary() {
   const userRef = useRef<string | null>(null);
   const flushing = useRef(false);
   const latestCapture = useRef(new Map<string, string>());
+  // Chapters removed this session; a slow load or an in-flight save must not
+  // bring them back.
+  const removed = useRef(new Set<string>());
 
   const publish = useCallback(() => {
     const id = userRef.current;
@@ -45,12 +48,13 @@ export function useLibrary() {
     flushing.current = true;
     try {
       for (const [url, local] of Object.entries(map.current)) {
-        if (!local.pending || local.conflict || owner !== userRef.current) continue;
+        if (!local.pending || local.conflict || owner !== userRef.current || removed.current.has(url)) continue;
         const sent = local.pending;
         setStatus("Saving…");
         const { data, error } = await client.rpc("save_progress", { p: sent, expected_revision: local.record?.revision ?? 0, importing: !!local.importing });
         if (owner !== userRef.current) return;
         if (error) throw error;
+        if (removed.current.has(url)) continue;
         const result = data as { accepted: boolean; record: ProgressRecord };
         map.current[url] = acknowledge(map.current[url], sent, result.record, result.accepted);
         publish();
@@ -92,6 +96,7 @@ export function useLibrary() {
         }
         if (cancelled) return;
         for (const record of records) {
+          if (removed.current.has(record.chapter_url)) continue;
           const local = map.current[record.chapter_url];
           if (!local?.pending) map.current[record.chapter_url] = { record };
         }
@@ -162,6 +167,27 @@ export function useLibrary() {
     return local?.pending ?? local?.record?.payload;
   }, []);
 
+  /** Drop chapters from the library, here and in the cloud. */
+  const remove = useCallback(async (urls: string[]) => {
+    if (!userRef.current || urls.length === 0) return;
+    for (const url of urls) {
+      removed.current.add(url);
+      delete map.current[url];
+      latestCapture.current.delete(url);
+    }
+    publish();
+    try {
+      const res = await authorizedFetch("/api/library", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ urls }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+    } catch {
+      setStatus("Removed on this device · couldn't reach your library");
+    }
+  }, [publish]);
+
   const resolve = useCallback((keepDevice: boolean) => {
     if (!conflict) return;
     const local = map.current[conflict];
@@ -175,7 +201,7 @@ export function useLibrary() {
     void flush();
   }, [conflict, publish, flush]);
 
-  return { enabled: !!client, ready, hydrated, user, status, entries, conflict, capture, restore, flush, resolve,
+  return { enabled: !!client, ready, hydrated, user, status, entries, conflict, capture, restore, flush, resolve, remove,
     signIn: async (email: string, password: string) => {
       if (!client) return;
       const { error } = await client.auth.signInWithPassword({ email, password });
