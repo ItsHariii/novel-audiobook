@@ -136,3 +136,21 @@ test("title variants of one book on one site share a library entry and its cover
   assert.equal(hua?.latest.url, "https://maehwasup.com/2026/09/20/chapter-1971/");
   assert.equal(groups.length, 4);
 });
+
+test("one book across sites merges by title variant and URL slug, skipping chapter-heading titles", () => {
+  const item = (url: string, bookTitle: string, bookId: string, lastAt: number, coverUrl?: string) =>
+    ({ url, title: bookTitle, bookTitle, bookId, source: new URL(url).hostname, coverSeed: bookTitle, lastAt, coverUrl });
+  const groups = groupHistoryByBook([
+    item("https://maehwasup.com/2024/08/19/chapter-1614/", "Return of the Mount Hua", "https://maehwasup.com::returnofthemounthua", 3),
+    item("https://amethystwriters.com/novel/return-of-the-mount-hua-sect/chapter-1137/", "Return of the Mount Hua Sect", "https://amethystwriters.com/return-of-the-mount-hua-sect", 2, "/cover"),
+    item("https://skydemonorder.com/projects/3801994495-return-of-the-mount-hua-sect/226-who-keeps-a-dragon-in-their-pond-1",
+      "226 — Who keeps a dragon in their pond! (1)", "https://skydemonorder.com/projects/3801994495-return-of-the-mount-hua-sect", 1),
+    item("https://novellunar.com/novel/divine-emperor-of-death/chapter/5", "Novellunar", "https://novellunar.com/divine-emperor-of-death", 0),
+    item("https://novelbuddy.me/divine-emperor-of-death/chapter-140-comfort", "Divine Emperor of Death", "https://novelbuddy.me/divine-emperor-of-death", 0),
+  ]);
+  assert.equal(groups.length, 2);
+  const hua = groups.find((g) => g.chapters.length === 3);
+  assert.equal(hua?.title, "Return of the Mount Hua Sect");
+  assert.equal(hua?.coverUrl, "/cover");
+  assert.equal(groups.find((g) => g.chapters.length === 2)?.title, "Divine Emperor of Death");
+});

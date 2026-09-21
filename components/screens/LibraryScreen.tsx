@@ -61,7 +61,7 @@ export function LibraryScreen(props: {
           return (
             <li key={book.key} id={`book-${book.key}`} style={{ animationDelay: `${Math.min(index, 8) * 35}ms` }}
               className="animate-tome-fade rounded-[18px] border border-[var(--color-border)] bg-[var(--color-panel)] transition-colors hover:border-[var(--color-border-strong)]">
-              <div className="flex gap-3.5 p-3">
+              <div className="flex gap-3 p-3">
                 <button type="button" onClick={() => setExpanded((p) => ({ ...p, [book.key]: !open }))} aria-expanded={open}
                   aria-label={`${book.title}: ${open ? "hide" : "show"} chapters`} className="flex min-w-0 flex-1 gap-3.5 text-left">
                   <Cover size="sm" title={book.title} seed={book.coverSeed} src={book.coverUrl} />
@@ -83,21 +83,45 @@ export function LibraryScreen(props: {
                     </div>
                   </div>
                 </button>
+                <div className="-mr-1 flex shrink-0 items-center gap-0.5 self-center">
+                <button type="button" onClick={() => setConfirming(confirming === book.key ? null : book.key)}
+                  aria-label={`Remove ${book.title} from library`} title="Remove from library" aria-expanded={confirming === book.key}
+                  className={`grid h-11 w-11 shrink-0 place-items-center rounded-full transition active:scale-95 ${
+                    confirming === book.key ? "bg-[var(--color-failed-soft)] text-[var(--color-failed)]" : "text-[var(--color-dim)] hover:bg-[var(--color-failed-soft)] hover:text-[var(--color-failed)]"
+                  }`}>
+                  <TrashIcon size={18} />
+                </button>
                 {isCurrent && props.playing ? (
                   <button type="button" onClick={props.onPause} aria-label="Pause" title="Pause"
-                    className="grid h-11 w-11 shrink-0 place-items-center self-center rounded-full bg-[var(--color-accent)] text-[var(--color-on-accent)] transition active:scale-95">
+                    className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[var(--color-accent)] text-[var(--color-on-accent)] transition active:scale-95">
                     <PauseIcon size={16} />
                   </button>
                 ) : (
                   <button type="button" onClick={() => props.onResume(book.latest.url)} aria-label={`Continue · ${continueLabel}`} title="Continue"
-                    className="grid h-11 w-11 shrink-0 place-items-center self-center rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent-text)] transition hover:brightness-110 active:scale-95">
+                    className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent-text)] transition hover:brightness-110 active:scale-95">
                     <PlayIcon size={16} />
                   </button>
                 )}
+                </div>
               </div>
+              {confirming === book.key && (
+                <div role="alertdialog" aria-label={`Remove ${book.title}?`}
+                  className="animate-tome-fade mx-3 mb-3 flex flex-wrap items-center gap-2 rounded-2xl bg-[var(--color-failed-soft)] py-2 pl-3.5 pr-2">
+                  <span className="min-w-0 flex-1 text-[13px] leading-snug">
+                    Remove <strong className="font-semibold">{book.title}</strong>
+                    {book.chapters.length > 1 ? ` and all ${book.chapters.length} saved chapters` : ""}?
+                  </span>
+                  <div className="flex gap-1.5">
+                    <button type="button" onClick={() => setConfirming(null)}
+                      className="h-10 rounded-xl px-3 text-[13px] font-semibold text-[var(--color-muted)] hover:bg-[var(--color-hover)]">Cancel</button>
+                    <button type="button" onClick={() => { setConfirming(null); props.onRemove(book); }}
+                      className="h-10 rounded-xl bg-[var(--color-failed)] px-4 text-[13px] font-semibold text-[var(--color-bg)] active:scale-95">Remove</button>
+                  </div>
+                </div>
+              )}
               {open && (
                 <div className="animate-tome-fade border-t border-[var(--color-border)]">
-                <ol className="px-2 py-2">
+                <ol className="max-h-[360px] overflow-y-auto overscroll-contain px-2 py-2">
                   {book.chapters.map((item) => {
                     const { badge, label } = splitChapterTitle(item.chapterLabel || item.title);
                     const active = item.url === props.currentUrl;
@@ -116,24 +140,6 @@ export function LibraryScreen(props: {
                     );
                   })}
                 </ol>
-                <div className="flex items-center justify-end gap-2 border-t border-[var(--color-border)] px-3 py-2.5">
-                  {confirming === book.key ? (
-                    <>
-                      <span className="mr-auto text-[12.5px] text-[var(--color-muted)]">
-                        Remove {book.chapters.length === 1 ? "this chapter" : `all ${book.chapters.length} chapters`} and your place?
-                      </span>
-                      <button type="button" onClick={() => setConfirming(null)}
-                        className="h-10 rounded-xl px-3 text-[13px] font-semibold text-[var(--color-muted)] hover:bg-[var(--color-hover)]">Cancel</button>
-                      <button type="button" onClick={() => { setConfirming(null); props.onRemove(book); }}
-                        className="h-10 rounded-xl bg-[var(--color-failed)] px-3.5 text-[13px] font-semibold text-[var(--color-bg)]">Remove</button>
-                    </>
-                  ) : (
-                    <button type="button" onClick={() => setConfirming(book.key)} aria-label={`Remove ${book.title} from library`}
-                      className="inline-flex h-10 items-center gap-1.5 rounded-xl px-3 text-[13px] font-semibold text-[var(--color-failed)] hover:bg-[var(--color-failed-soft)]">
-                      <TrashIcon size={16} />Remove from library
-                    </button>
-                  )}
-                </div>
                 </div>
               )}
             </li>

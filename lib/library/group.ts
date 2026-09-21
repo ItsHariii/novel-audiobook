@@ -76,54 +76,108 @@ function hostOf(url: string): string {
   }
 }
 
+/** Book name hidden in a book key's URL ("…/3801994495-return-of-the-mount-hua-sect"). */
+export function slugTitle(key: string | undefined): string | null {
+  if (!key) return null;
+  if (key.includes("::")) return null;
+  let segment: string;
+  try {
+    segment = decodeURIComponent(new URL(key).pathname.split("/").filter(Boolean).at(-1) ?? "");
+  } catch {
+    return null;
+  }
+  const words = segment
+    .toLowerCase()
+    .replace(/\.html?$/, "")
+    .replace(/^\d{3,}[-_]/, "")
+    .replace(/[-_]\d+$/, "")
+    .replace(/[-_](web[-_])?(novel|ln|mtl)([-_](mtl|novel))?$/, "")
+    .split(/[-_]+/)
+    .filter(Boolean);
+  if (words.length < 2) return null;
+  return words.map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
+}
+
+/** Titles that are really a chapter heading or the site's own name. */
+function poorTitle(title: string, hosts: Set<string>): boolean {
+  if (isPlaceholderTitle(title)) return true;
+  if (/^\s*\d/.test(title) || /\b(chapter|ch\.?|episode)\s*\d/i.test(title)) return true;
+  const norm = normalizeBookTitle(title);
+  return [...hosts].some((h) => normalizeBookTitle(h.split(".")[0]) === norm);
+}
+
+// Trailing words sites add or drop without it being a different book. Anything
+// else ("extra", "ragnarok", "2") may be a side story or sequel, so it stays apart.
+const VARIANT_TAILS = new Set(["sect", "novel", "webnovel", "wn", "ln", "lightnovel", "mtl"]);
+
+/** Same book when equal, or when one is the other plus a known naming tail ("sect"). */
+function sameBook(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  return short.length >= 8 && long.startsWith(short) && VARIANT_TAILS.has(long.slice(short.length));
+}
+
 /**
- * Sites title the same book differently from page to page ("Return of the
- * Mount Hua" vs "Return of the Mount Hua Sect"). Fold groups together when
- * they share a book id, or when they come from the same site and one title is
- * the other plus a few trailing words.
+ * The same book turns up under different names across sites and pages
+ * ("Return of the Mount Hua" on one, "... Sect" on another, a chapter heading
+ * saved as the title on a third). Fold groups together when they share a
+ * book id, or when any of their names — titles or the book's URL slug — match.
  */
 function mergeVariants(groups: BookGroup[]): BookGroup[] {
   const parent = groups.map((_, i) => i);
   const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
-  const ids = groups.map((g) => new Set(g.chapters.map((c) => c.bookId).filter(Boolean)));
   const hosts = groups.map((g) => new Set(g.chapters.map((c) => hostOf(c.url))));
-  const norms = groups.map((g) => normalizeBookTitle(g.title));
+  const ids = groups.map((g) => new Set(g.chapters.map((c) => c.bookId).filter((id): id is string => !!id)));
+  const names = groups.map((g, i) => {
+    const out = new Set<string>();
+    if (!poorTitle(g.title, hosts[i])) out.add(normalizeBookTitle(g.title));
+    for (const id of ids[i]) {
+      const slug = slugTitle(id);
+      if (slug) out.add(normalizeBookTitle(slug));
+    }
+    out.delete("");
+    return out;
+  });
   for (let i = 0; i < groups.length; i++) {
     for (let j = i + 1; j < groups.length; j++) {
       const sharedId = [...ids[i]].some((id) => ids[j].has(id));
-      const sameHost = [...hosts[i]].some((h) => hosts[j].has(h));
-      const [short, long] = norms[i].length <= norms[j].length ? [norms[i], norms[j]] : [norms[j], norms[i]];
-      // A short, number-free tail ("sect", "novel") is a naming variant; a
-      // longer or numbered one ("ragnarok", "2") is more likely a sequel.
-      const tail = long.slice(short.length);
-      const variant = sameHost && short.length >= 8 && long.startsWith(short) && tail.length <= 6 && !/\d/.test(tail);
-      if (sharedId || variant) parent[find(j)] = find(i);
+      const sharedName = [...names[i]].some((a) => [...names[j]].some((b) => sameBook(a, b)));
+      if (sharedId || sharedName) parent[find(j)] = find(i);
     }
   }
-  const merged = new Map<number, BookGroup>();
+  const merged = new Map<number, { group: BookGroup; hosts: Set<string>; slugs: string[] }>();
   groups.forEach((g, i) => {
     const root = find(i);
-    const into = merged.get(root);
-    if (!into) {
-      merged.set(root, { ...g, chapters: [...g.chapters], sources: [...g.sources] });
+    const slugs = [...ids[i]].map(slugTitle).filter((t): t is string => !!t);
+    const entry = merged.get(root);
+    if (!entry) {
+      merged.set(root, { group: { ...g, chapters: [...g.chapters], sources: [...g.sources] }, hosts: new Set(hosts[i]), slugs });
       return;
     }
+    const into = entry.group;
     const seen = new Set(into.chapters.map((c) => c.url));
     into.chapters.push(...g.chapters.filter((c) => !seen.has(c.url)));
     for (const src of g.sources) if (!into.sources.includes(src)) into.sources.push(src);
+    for (const h of hosts[i]) entry.hosts.add(h);
+    entry.slugs.push(...slugs);
     if (g.lastAt > into.lastAt) {
       into.lastAt = g.lastAt;
       into.latest = g.latest;
     }
     into.maxChapter = Math.max(into.maxChapter, g.maxChapter);
     into.coverUrl = into.coverUrl || g.coverUrl;
-    // The fuller title is usually the real one.
-    if (!isPlaceholderTitle(g.title) && (isPlaceholderTitle(into.title) || g.title.length > into.title.length)) {
+    // The fuller real title wins over a shorter one or a chapter heading.
+    const intoPoor = poorTitle(into.title, entry.hosts);
+    if (!poorTitle(g.title, hosts[i]) && (intoPoor || g.title.length > into.title.length)) {
       into.title = g.title;
-      into.coverSeed = g.title;
     }
   });
-  return [...merged.values()];
+  return [...merged.values()].map(({ group, hosts: h, slugs }) => {
+    if (poorTitle(group.title, h) && slugs.length > 0) group.title = slugs.sort((a, b) => b.length - a.length)[0];
+    group.coverSeed = group.title;
+    return group;
+  });
 }
 
 function deriveBookKey(item: HistoryItem): string {
