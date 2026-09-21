@@ -10,6 +10,15 @@ function fmt(rate: number): string {
   return `${Math.round(rate * 100) / 100}x`;
 }
 
+const TILE =
+  "flex h-16 w-full flex-col items-center justify-center gap-1 rounded-2xl text-[11px] font-semibold transition hover:bg-[var(--color-hover)] disabled:opacity-35";
+const MENU =
+  "absolute bottom-full left-1/2 z-30 mb-2 -translate-x-1/2 rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-1.5 shadow-[0_20px_40px_-12px_var(--color-shadow)]";
+const MENU_ITEM =
+  "flex min-h-10 w-full items-center justify-between rounded-[10px] px-3 text-left text-[13px] transition hover:bg-[var(--color-hover)]";
+
+export { TILE as tileClass, MENU as menuClass, MENU_ITEM as menuItemClass };
+
 export function PlaybackSpeedButton(props: {
   rate: number;
   onChange: (rate: number) => void;
@@ -47,21 +56,18 @@ export function PlaybackSpeedButton(props: {
         aria-expanded={open}
         aria-label={`Playback speed: ${label}`}
         title={`Playback speed: ${label}`}
-        className={`tabular flex h-10 min-w-[44px] items-center justify-center rounded-full px-2.5 text-[11px] font-semibold transition hover:bg-white/5 disabled:opacity-30 ${
-          isNonDefault
-            ? "text-[var(--color-accent)]"
-            : "text-[var(--color-text)]/85 hover:text-[var(--color-text)]"
-        }`}
+        className={`${TILE} ${isNonDefault ? "text-[var(--color-accent-text)]" : "text-[var(--color-muted)]"}`}
       >
-        {label}
+        <span className="tabular text-[15px] font-semibold text-[var(--color-text)]">{label.replace("x", "×")}</span>
+        <span>Speed</span>
       </button>
 
       {open && (
         <div
           role="menu"
-          className="absolute bottom-full right-0 z-30 mb-2 w-40 rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)] p-1.5 shadow-xl"
+          className={`${MENU} w-40`}
         >
-          <div className="px-3 py-1.5 text-[10.5px] font-medium uppercase tracking-[0.18em] text-[var(--color-muted)]">
+          <div className="eyebrow px-3 py-2">
             Playback speed
           </div>
           {PRESETS.map((r) => {
@@ -74,11 +80,7 @@ export function PlaybackSpeedButton(props: {
                   props.onChange(r);
                   setOpen(false);
                 }}
-                className={`tabular flex w-full items-center justify-between rounded-md px-3 py-1.5 text-left text-xs transition hover:bg-white/5 ${
-                  active
-                    ? "text-[var(--color-accent)]"
-                    : "text-[var(--color-text)]/90"
-                }`}
+                className={`tabular ${MENU_ITEM} ${active ? "text-[var(--color-accent-text)]" : "text-[var(--color-text)]"}`}
               >
                 <span>{fmt(r)}</span>
                 {active && <span aria-hidden>●</span>}

@@ -2,19 +2,24 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Chapter } from "@/lib/types";
-import { EmptyState } from "@/components/player/EmptyState";
-import { Header } from "@/components/player/Header";
-import { HeroCard } from "@/components/player/HeroCard";
 import { LoadingSkeleton } from "@/components/player/LoadingSkeleton";
-import { PlayerBar } from "@/components/player/PlayerBar";
-import { ReaderPanel } from "@/components/player/ReaderPanel";
-import { RsvpControls } from "@/components/player/RsvpControls";
-import { RsvpPanel } from "@/components/player/RsvpPanel";
-import { SettingsDrawer } from "@/components/player/SettingsDrawer";
-import { Sidebar } from "@/components/player/Sidebar";
+import type { ReaderFace, ReaderMargin } from "@/components/player/ReaderPanel";
 import type { SleepMode } from "@/components/player/SleepTimerButton";
 import { Toast } from "@/components/player/Toast";
-import { LibraryAccount } from "@/components/player/LibraryAccount";
+import { AddSheet } from "@/components/screens/AddSheet";
+import { HomeScreen } from "@/components/screens/HomeScreen";
+import { LibraryScreen } from "@/components/screens/LibraryScreen";
+import { NowPlayingScreen } from "@/components/screens/NowPlayingScreen";
+import { ReaderScreen } from "@/components/screens/ReaderScreen";
+import { FONT_MAX, FONT_MIN, ReaderSettingsSheet, type ReaderPrefs } from "@/components/screens/ReaderSettings";
+import { SearchScreen } from "@/components/screens/SearchScreen";
+import { YouScreen } from "@/components/screens/YouScreen";
+import type { AudioState, NarrationSummary, NowPlaying } from "@/components/screens/shared";
+import { MiniPlayer } from "@/components/shell/MiniPlayer";
+import { BottomNav, NavRail, type Tab } from "@/components/shell/Nav";
+import { AlertIcon } from "@/components/ui/icons";
+import { groupHistoryByBook } from "@/lib/library/group";
+import { useTheme } from "@/lib/theme";
 import type { useLibrary } from "@/lib/library/useLibrary";
 import { useTitleRepair } from "@/lib/library/useTitleRepair";
 import { bookKey, type ChapterProgress } from "@/lib/library/types";
@@ -22,17 +27,13 @@ import { writeLegacyPosition } from "@/lib/library/local";
 import { authorizedFetch } from "@/lib/supabase/browser";
 import { usePlaybackSession } from "@/lib/audio/usePlaybackSession";
 import { restoreApplies, type PendingRestore } from "@/lib/audio/restore";
-import type {
-  Chunk,
-  HistoryItem,
-  LoadedChapter,
-  ViewMode,
-} from "@/components/player/types";
 import {
-  findWordIndexForChunk,
-  tokenizeChunks,
-  type RsvpWord,
-} from "@/lib/rsvp";
+  normalizeMode,
+  type Chunk,
+  type HistoryItem,
+  type LoadedChapter,
+  type ViewMode,
+} from "@/components/player/types";
 
 const VOICES: Array<{ id: string; label: string }> = [
   { id: "en-US-AvaNeural", label: "Ava (US, female, natural)" },
@@ -51,14 +52,12 @@ const LS_SPEED = "nab:speed";
 const LS_POSITION_PREFIX = "nab:pos:";
 const LS_HISTORY = "nab:history";
 const LS_READER_FONT = "nab:readerFont";
-const LS_PLAYER_VISIBLE = "nab:playerVisible";
-const LS_THEME = "nab:theme";
+const LS_READER_LINE = "nab:readerLine";
+const LS_READER_FACE = "nab:readerFace";
+const LS_READER_MARGIN = "nab:readerMargin";
 const LS_VIEW_MODE = "nab:viewMode";
-const LS_WPM = "nab:wpm";
-const LS_RSVP_PREFIX = "nab:rsvp:";
 const LS_MEDIA_LOG = "nab:mediaLog";
-
-const DEFAULT_WPM = 400;
+const LS_COVERS = "nab:covers";
 // How long the element may claim to be playing without its clock advancing
 // before we treat the native player as dead. Longer than one segment (6s) so an
 // ordinary rebuffer is not mistaken for a stall.
@@ -85,8 +84,6 @@ type MediaLogEntry = {
   buf: number;
   err?: string;
 };
-
-type Theme = "dark" | "light";
 
 interface ChapterMetaResponse {
   ok: true;
@@ -196,19 +193,26 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
   const [error, setError] = useState<string | null>(null);
   const [chunkPosition, setChunkPosition] = useState(0);
   const [chunkDuration, setChunkDuration] = useState(0);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [readerLine, setReaderLine] = useState(1.75);
+  const [readerFace, setReaderFace] = useState<ReaderFace>("serif");
+  const [readerMargin, setReaderMargin] = useState<ReaderMargin>("medium");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [playerBarVisible, setPlayerBarVisible] = useState(true);
-  const [headerHidden, setHeaderHidden] = useState(false);
   const [sleep, setSleep] = useState<SleepMode>(null);
   const [sleepRemainingMs, setSleepRemainingMs] = useState(0);
-  const [theme, setTheme] = useState<Theme>("dark");
+  const theme = useTheme();
   const [viewMode, setViewMode] = useState<ViewMode>("reader");
-  const [wpm, setWpm] = useState<number>(DEFAULT_WPM);
-  const [rsvpWordIndex, setRsvpWordIndex] = useState<number>(0);
-  const [isRsvpPlaying, setIsRsvpPlaying] = useState<boolean>(false);
   const [mediaLog, setMediaLog] = useState<MediaLogEntry[]>([]);
+  // Navigation: a tab underneath, optionally covered by a chapter surface.
+  const [tab, setTab] = useState<Tab>("home");
+  const [surface, setSurface] = useState<"reader" | "player" | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [readerSettingsOpen, setReaderSettingsOpen] = useState(false);
+  const [focusBook, setFocusBook] = useState<string | null>(null);
+  // URL of the last chapter request whose text arrived; the add sheet waits on it.
+  const [loadedRequest, setLoadedRequest] = useState("");
+  // Cover image per book key ("" = looked up, none found).
+  const [covers, setCovers] = useState<Record<string, string>>({});
+  const coverLookupsRef = useRef(new Set<string>());
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const mediaLogRef = useRef<MediaLogEntry[]>([]);
@@ -246,7 +250,6 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
     const savedSpeed = localStorage.getItem(LS_SPEED);
     const savedHistory = localStorage.getItem(LS_HISTORY);
     const savedFont = localStorage.getItem(LS_READER_FONT);
-    const savedPlayerVisible = localStorage.getItem(LS_PLAYER_VISIBLE);
     if (savedUrl) setInputUrl(savedUrl);
     if (savedVoice) setVoice(savedVoice);
     if (savedSpeed) {
@@ -262,32 +265,18 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
     }
     if (savedFont) {
       const n = parseInt(savedFont, 10);
-      if (!Number.isNaN(n)) setReaderFontSize(n);
+      if (!Number.isNaN(n)) setReaderFontSize(Math.max(FONT_MIN, Math.min(FONT_MAX, n)));
     }
-    if (savedPlayerVisible === "0") setPlayerBarVisible(false);
+    const savedLine = parseFloat(localStorage.getItem(LS_READER_LINE) || "");
+    if (savedLine >= 1.3 && savedLine <= 2.2) setReaderLine(savedLine);
+    const savedFace = localStorage.getItem(LS_READER_FACE);
+    if (savedFace === "serif" || savedFace === "sans") setReaderFace(savedFace);
+    const savedMargin = localStorage.getItem(LS_READER_MARGIN);
+    if (savedMargin === "narrow" || savedMargin === "medium" || savedMargin === "wide") setReaderMargin(savedMargin);
     const savedView = localStorage.getItem(LS_VIEW_MODE);
-    if (savedView === "reader" || savedView === "rsvp" || savedView === "audio") {
-      setViewMode(savedView);
-    }
-    const savedWpm = localStorage.getItem(LS_WPM);
-    if (savedWpm) {
-      const n = parseInt(savedWpm, 10);
-      if (!Number.isNaN(n) && n > 0) setWpm(n);
-    }
-    const attr = document.documentElement.getAttribute("data-theme");
-    if (attr === "light" || attr === "dark") setTheme(attr);
+    if (savedView) setViewMode(normalizeMode(savedView));
+    try { setCovers(JSON.parse(localStorage.getItem(LS_COVERS) || "{}")); } catch {}
     setLocalHydrated(true);
-  }, []);
-
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-    try {
-      localStorage.setItem(LS_THEME, theme);
-    } catch {}
-  }, [theme]);
-
-  const toggleTheme = useCallback(() => {
-    setTheme((t) => (t === "dark" ? "light" : "dark"));
   }, []);
 
   useEffect(() => { try { localStorage.setItem(LS_VOICE, voice); } catch {} }, [voice]);
@@ -299,10 +288,13 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
     try { localStorage.setItem(LS_READER_FONT, String(readerFontSize)); } catch {}
   }, [readerFontSize]);
   useEffect(() => {
-    try { localStorage.setItem(LS_PLAYER_VISIBLE, playerBarVisible ? "1" : "0"); } catch {}
-  }, [playerBarVisible]);
+    try {
+      localStorage.setItem(LS_READER_LINE, String(readerLine));
+      localStorage.setItem(LS_READER_FACE, readerFace);
+      localStorage.setItem(LS_READER_MARGIN, readerMargin);
+    } catch {}
+  }, [readerLine, readerFace, readerMargin]);
   useEffect(() => { try { localStorage.setItem(LS_VIEW_MODE, viewMode); } catch {} }, [viewMode]);
-  useEffect(() => { try { localStorage.setItem(LS_WPM, String(wpm)); } catch {} }, [wpm]);
 
   const persistMediaLog = useCallback(() => {
     try { localStorage.setItem(LS_MEDIA_LOG, JSON.stringify(mediaLogRef.current)); } catch {}
@@ -517,6 +509,12 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
     audio.load();
   }, [detachHls]);
 
+  const coversRef = useRef(covers);
+  useEffect(() => {
+    coversRef.current = covers;
+    try { localStorage.setItem(LS_COVERS, JSON.stringify(covers)); } catch {}
+  }, [covers]);
+
   const pushHistory = useCallback((chapter: Chapter) => {
     const item: HistoryItem = {
       url: chapter.url,
@@ -527,6 +525,7 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
       bookTitle: chapter.bookTitle,
       chapterLabel: chapter.chapterLabel,
       bookId: bookKey(chapter),
+      coverUrl: coversRef.current[bookKey(chapter)] || undefined,
     };
     setHistory((prev) => [item, ...prev.filter((p) => p.url !== item.url)]);
   }, []);
@@ -570,6 +569,7 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
         const text = await fetchChapterMeta(url, requestedVoice, ac.signal);
         if (ac.signal.aborted) return;
         textLoaded = true;
+        setLoadedRequest(url);
         const preview = library.enabled ? { ...text, audioPending: true, playlistUrl: "" } : text;
         setCurrent(preview);
         if (!keepText) {
@@ -664,7 +664,7 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
     if (!savedUrl) return;
     didAutoResumeRef.current = true;
     const saved = library.restore(savedUrl);
-    if (saved) setViewMode(saved.mode);
+    if (saved) setViewMode(normalizeMode(saved.mode));
     void loadChapterFromUrl(savedUrl, false, saved?.voice);
   }, [loadChapterFromUrl, localHydrated, library.enabled, library.hydrated, library.user, library.entries, library.restore]);
 
@@ -682,7 +682,7 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
       if (p.chapterUrl === current?.chapter.url) {
         // Do not recapture the losing position while applying an explicit choice.
         captureRef.current = () => {};
-        setViewMode(p.mode);
+        setViewMode(normalizeMode(p.mode));
         void loadChapterFromUrl(p.chapterUrl, false, p.voice);
       }
     };
@@ -1022,7 +1022,8 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
         mode: a.paused ? viewMode : "audio", audioTime: Number(time.toFixed(3)), voice: active.audioPending ? saved?.voice ?? active.voice : active.voice,
         readerChunk: active.chapter.url === current.chapter.url ? readerPositionRef.current.chunk : saved?.readerChunk ?? 0,
         readerOffset: active.chapter.url === current.chapter.url ? readerPositionRef.current.offset : saved?.readerOffset ?? 0,
-        wordIndex: active.chapter.url === current.chapter.url ? rsvpWordIndexRef.current : saved?.wordIndex ?? 0,
+        wordIndex: saved?.wordIndex ?? 0,
+        coverUrl: coversRef.current[bookKey(active.chapter)] || saved?.coverUrl,
       };
       try {
         writeLegacyPosition(p);
@@ -1169,171 +1170,16 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
     };
   }, [isPlaying, current, chapterLoading, recoverPlayback]);
 
-  // Double-tap brings header back when hidden.
-  useEffect(() => {
-    if (!headerHidden) return;
-    const DOUBLE_TAP_MS = 350;
-    let lastTapAt = 0;
-    const onPointer = () => {
-      const now = Date.now();
-      if (now - lastTapAt <= DOUBLE_TAP_MS) {
-        lastTapAt = 0;
-        setHeaderHidden(false);
-        return;
-      }
-      lastTapAt = now;
-    };
-    window.addEventListener("pointerdown", onPointer);
-    return () => window.removeEventListener("pointerdown", onPointer);
-  }, [headerHidden]);
-
-  const rsvpWords = useMemo<RsvpWord[]>(
-    () => (current ? tokenizeChunks(current.chunks) : []),
-    [current],
-  );
-
-  // Restore RSVP word index when chapter changes.
-  useEffect(() => {
-    if (!current) {
-      setRsvpWordIndex(0);
-      return;
-    }
-    const saved = localStorage.getItem(LS_RSVP_PREFIX + current.chapter.url);
-    if (!saved) {
-      setRsvpWordIndex(0);
-      return;
-    }
-    try {
-      const parsed = JSON.parse(saved);
-      if (typeof parsed?.wordIndex === "number") {
-        setRsvpWordIndex(Math.max(0, parsed.wordIndex));
-        return;
-      }
-    } catch {}
-    setRsvpWordIndex(0);
-  }, [current?.chapter.url]);
-
-  // Persist RSVP word index per chapter while in RSVP mode. Refs avoid
-  // re-creating the interval on every word tick.
-  const rsvpWordIndexRef = useRef(rsvpWordIndex);
-  useEffect(() => { rsvpWordIndexRef.current = rsvpWordIndex; }, [rsvpWordIndex]);
-
-  useEffect(() => {
-    if (!current || viewMode !== "rsvp") return;
-    const key = LS_RSVP_PREFIX + current.chapter.url;
-    const save = () => {
-      try {
-        localStorage.setItem(
-          key,
-          JSON.stringify({ wordIndex: rsvpWordIndexRef.current }),
-        );
-      } catch {}
-    };
-    const t = setInterval(save, 3000);
-    const onVisibility = () => {
-      if (document.visibilityState === "hidden") save();
-    };
-    const onHide = () => save();
-    document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("pagehide", onHide);
-    window.addEventListener("beforeunload", onHide);
-    return () => {
-      save();
-      clearInterval(t);
-      document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("pagehide", onHide);
-      window.removeEventListener("beforeunload", onHide);
-    };
-  }, [current, viewMode]);
-
-  // Mode-switch side effects: pause audio on enter, sync chunk/word on toggle.
-  const prevViewModeRef = useRef<ViewMode>(viewMode);
-  useEffect(() => {
-    const prev = prevViewModeRef.current;
-    if (prev === viewMode) return;
-    prevViewModeRef.current = viewMode;
-
-    if (viewMode === "rsvp") {
-      const a = audioRef.current;
-      if (a && !a.paused) a.pause();
-      wantPlayRef.current = false;
-      setIsPlaying(false);
-      if (rsvpWords.length > 0 && rsvpWordIndex === 0 && currentChunkIndex > 0) {
-        setRsvpWordIndex(findWordIndexForChunk(rsvpWords, currentChunkIndex));
-      }
-      return;
-    }
-
-    if (prev === "rsvp") {
-      setIsRsvpPlaying(false);
-      if (rsvpWords.length > 0 && current) {
-        const clamped = Math.min(rsvpWordIndex, rsvpWords.length - 1);
-        const word = rsvpWords[clamped];
-        if (word && word.chunkIndex !== currentChunkIndex) {
-          const a = audioRef.current;
-          if (a && !current.audioPending) a.currentTime = (current.startOffset ?? 0) + (timing?.cumDurations[word.chunkIndex] ?? 0);
-          setCurrentChunkIndex(word.chunkIndex);
-          setChunkPosition(0);
-          setChunkDuration(timing?.durations[word.chunkIndex] ?? 0);
-        }
-      }
-    }
-  }, [viewMode, rsvpWords, rsvpWordIndex, currentChunkIndex, current, timing]);
-
-  const skipRsvpWords = useCallback(
-    (delta: number) => {
-      setRsvpWordIndex((i) => {
-        const max = Math.max(0, rsvpWords.length - 1);
-        return Math.max(0, Math.min(max, i + delta));
-      });
-    },
-    [rsvpWords.length],
-  );
-
-  const seekRsvpWord = useCallback(
-    (idx: number) => {
-      const max = Math.max(0, rsvpWords.length - 1);
-      setRsvpWordIndex(Math.max(0, Math.min(max, idx)));
-    },
-    [rsvpWords.length],
-  );
-
-  const toggleRsvpPlay = useCallback(() => {
-    if (rsvpWords.length === 0) return;
-    setIsRsvpPlaying((v) => !v);
-  }, [rsvpWords.length]);
-
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (
         target?.tagName === "INPUT" ||
         target?.tagName === "TEXTAREA" ||
-        target?.tagName === "SELECT"
+        target?.tagName === "SELECT" ||
+        target?.closest?.("[role=dialog]")
       )
         return;
-      if (viewMode === "rsvp") {
-        if (e.key === " ") {
-          e.preventDefault();
-          toggleRsvpPlay();
-        } else if (e.key === "ArrowLeft") {
-          e.preventDefault();
-          skipRsvpWords(-10);
-        } else if (e.key === "ArrowRight") {
-          e.preventDefault();
-          skipRsvpWords(10);
-        } else if (e.key === "[") {
-          e.preventDefault();
-          goPrevChapter();
-        } else if (e.key === "]") {
-          e.preventDefault();
-          goNextChapter();
-        } else if (e.key === "?") {
-          e.preventDefault();
-          setShortcutsOpen((v) => !v);
-        }
-        return;
-      }
       if (e.key === " ") {
         e.preventDefault();
         void togglePlay();
@@ -1356,15 +1202,7 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [
-    togglePlay,
-    seekSeconds,
-    goPrevChapter,
-    goNextChapter,
-    viewMode,
-    toggleRsvpPlay,
-    skipRsvpWords,
-  ]);
+  }, [togglePlay, seekSeconds, goPrevChapter, goNextChapter]);
 
   // Cleanup hls.js instance on unmount.
   useEffect(() => {
@@ -1378,171 +1216,396 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
     return Math.min(100, (t / timing.totalDuration) * 100);
   }, [current, currentChunkIndex, chunkPosition]);
 
-  const onSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const u = inputUrl.trim();
-    if (!u) return;
-    setSidebarOpen(false);
-    void loadChapterFromUrl(u, false);
-  };
+  // Look up a cover once per book. The server finds it and hands back a
+  // signed image URL; "" records a miss so we don't ask again.
+  useEffect(() => {
+    if (!current) return;
+    const key = bookKey(current.chapter);
+    if (key in covers || coverLookupsRef.current.has(key)) return;
+    coverLookupsRef.current.add(key);
+    const title = current.chapter.bookTitle || current.chapter.title;
+    void (async () => {
+      try {
+        const res = await authorizedFetch(`/api/cover?url=${encodeURIComponent(current.chapter.url)}&title=${encodeURIComponent(title)}`);
+        const data = (await res.json()) as { ok: boolean; cover?: string | null };
+        if (!res.ok || !data.ok) return;
+        setCovers((prev) => ({ ...prev, [key]: data.cover || "" }));
+        if (data.cover) {
+          setHistory((prev) => prev.map((h) => (h.bookId === key && !h.coverUrl ? { ...h, coverUrl: data.cover! } : h)));
+        }
+      } catch {}
+    })();
+  }, [current, covers]);
 
-  const currentChunk = current?.chunks[currentChunkIndex];
-  const libraryHistory = library.enabled ? library.entries : history;
-  const pickHistory = (url: string) => {
+  const libraryHistory = useMemo(() => {
+    const items = library.enabled ? library.entries : history;
+    return items.map((item) => (item.coverUrl || !item.bookId || !covers[item.bookId] ? item : { ...item, coverUrl: covers[item.bookId] }));
+  }, [library.enabled, library.entries, history, covers]);
+  const books = useMemo(() => groupHistoryByBook(libraryHistory), [libraryHistory]);
+  const currentBook = current ? books.find((b) => b.chapters.some((c) => c.url === current.chapter.url)) : undefined;
+
+  const openSurface = useCallback((next: "reader" | "player" | null) => {
+    setSurface(next);
+    if (next === "reader") setViewMode("reader");
+    else if (next === "player") setViewMode("audio");
+  }, []);
+
+  useEffect(() => {
+    if (!current && !chapterLoading) setSurface(null);
+  }, [current, chapterLoading]);
+
+  useEffect(() => {
+    if (surface !== "player") return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector("[role=dialog]")) openSurface(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [surface, openSurface]);
+
+  const pickHistory = (url: string, options: { play?: boolean; surface?: "reader" | "player" } = {}) => {
+    if (current?.chapter.url === url && !chapterLoading) {
+      openSurface(options.surface ?? "reader");
+      if (options.play && !isPlaying && !current.audioPending) void togglePlay();
+      return;
+    }
     captureRef.current();
     const saved = library.restore(url);
     setInputUrl(url);
-    setSidebarOpen(false);
-    if (saved) setViewMode(saved.mode);
-    void loadChapterFromUrl(url, false, saved?.voice);
+    openSurface(options.surface ?? (saved && normalizeMode(saved.mode) === "audio" ? "player" : "reader"));
+    void loadChapterFromUrl(url, !!options.play, saved?.voice);
   };
-  const account = library.enabled ? <LibraryAccount email={library.user?.email} ready={library.ready}
-    status={titleRepair.status ?? library.status} conflict={library.conflict} onResolve={library.resolve}
-    onSignOut={async () => {
-      captureRef.current();
-      await library.flush();
-      abortRef.current?.abort();
-      audioRef.current?.pause();
-      await playback.close();
-      detachHls();
-      audioRef.current?.removeAttribute("src");
-      audioRef.current?.load();
-      setCurrent(null); setIsPlaying(false); setChapterLoading(false);
-      await library.signOut();
-      didAutoResumeRef.current = false;
-    }} /> : undefined;
+
+  const retryAudio = async () => {
+    setError(null);
+    if (playback.session) await authorizedFetch(`/api/playback-sessions/${playback.session.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "retry" }) });
+    void loadChapterFromUrl(current?.chapter.url || inputUrl, isPlaying, voice, !!current);
+  };
+
+  const listenFromHere = async () => {
+    const a = audioRef.current;
+    if (!a || !current || current.audioPending) return;
+    // Only move the audio when the page has moved on from the part it is at,
+    // so a paused chapter resumes where it stopped.
+    const chunk = readerPositionRef.current.chunk;
+    if (chunk !== currentChunkIndex) onPickChunk(chunk);
+    if (a.paused) await togglePlay();
+  };
+
+  const pause = () => {
+    wantPlayRef.current = false;
+    audioRef.current?.pause();
+    setIsPlaying(false);
+  };
+
+  const signOut = async () => {
+    captureRef.current();
+    await library.flush();
+    abortRef.current?.abort();
+    audioRef.current?.pause();
+    await playback.close();
+    detachHls();
+    audioRef.current?.removeAttribute("src");
+    audioRef.current?.load();
+    setCurrent(null); setIsPlaying(false); setChapterLoading(false);
+    setSurface(null); setTab("home");
+    await library.signOut();
+    didAutoResumeRef.current = false;
+  };
+
+  const audioFailed = !!playback.error || (!!error && library.enabled && !!current);
+  const audioState: AudioState = !current ? "none"
+    : audioFailed ? "failed"
+    : current.audioPending || playback.preparing ? "preparing"
+    : isPlaying ? "playing" : "ready";
+  const audioMessage = playback.error || error;
+
+  const elapsed = timing ? Math.max(0, (timing.cumDurations[currentChunkIndex] ?? 0) + chunkPosition) : 0;
+  const nowPlaying: NowPlaying | null = current ? {
+    url: current.chapter.url,
+    title: current.chapter.title,
+    chapterLabel: current.chapter.chapterLabel,
+    bookTitle: currentBook?.title || current.chapter.bookTitle || current.chapter.title,
+    source: current.chapter.source,
+    coverSeed: currentBook?.coverSeed || current.chapter.bookTitle || current.chapter.title,
+    coverUrl: currentBook?.coverUrl || covers[bookKey(current.chapter)] || undefined,
+    elapsed,
+    duration: current.audioPending ? 0 : timing?.totalDuration ?? 0,
+    percent: progressPercent,
+  } : null;
+
+  const narration: NarrationSummary | null = !current || !library.enabled || (!playback.session && !playback.preparing && !playback.error) ? null : {
+    title: `${nowPlaying!.bookTitle} · ${current.chapter.chapterLabel || current.chapter.title}`,
+    detail: playback.error ? "Narration stopped · open the chapter to retry"
+      : playback.preparing || current.audioPending ? "Preparing audio · you can read while you wait"
+      : `${playback.session?.chapters.length ?? 0} ${playback.session?.chapters.length === 1 ? "chapter" : "chapters"} narrated${playback.session?.terminal ? "" : " so far"}`,
+    done: !!playback.session?.terminal && !playback.preparing,
+    failed: !!playback.error,
+  };
+
+  const statusBanner = (() => {
+    if (!current) return null;
+    if (audioFailed) {
+      return (
+        <div role="alert" className="flex items-center gap-3 rounded-2xl bg-[var(--color-failed-soft)] py-1.5 pl-3.5 pr-1.5 text-[13px] text-[var(--color-text)]">
+          <AlertIcon size={17} className="shrink-0 text-[var(--color-failed)]" />
+          <span className="min-w-0 flex-1 leading-snug">{audioMessage}{current.audioPending && " You can keep reading."}</span>
+          <button type="button" className="h-10 shrink-0 rounded-xl px-3 font-semibold text-[var(--color-failed)] hover:bg-[var(--color-hover)]" onClick={() => void retryAudio()}>Retry audio</button>
+        </div>
+      );
+    }
+    if (playback.preparing) {
+      return (
+        <p role="status" className="flex items-center gap-2.5 rounded-2xl bg-[var(--color-working-soft)] px-3.5 py-2.5 text-[13px] text-[var(--color-working)]">
+          <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-working)] animate-tome-pulse" />
+          Preparing audio · you can read while you wait.
+        </p>
+      );
+    }
+    if (current.sessionId && !current.audioPending && !isPlaying && !error) {
+      return (
+        <p role="status" className="flex items-center gap-2.5 rounded-2xl bg-[var(--color-ready-soft)] px-3.5 py-2.5 text-[13px] text-[var(--color-ready)]">
+          <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-ready)]" />
+          Audio ready · press Play whenever you like.
+        </p>
+      );
+    }
+    return null;
+  })();
+
+  const voiceName = VOICES.find((v) => v.id === voice)?.label.split(" (")[0] ?? voice;
+  const readerPrefs: ReaderPrefs = { fontSize: readerFontSize, lineHeight: readerLine, face: readerFace, margin: readerMargin };
+  const setReaderPrefs = (next: ReaderPrefs) => {
+    setReaderFontSize(next.fontSize);
+    setReaderLine(next.lineHeight);
+    setReaderFace(next.face);
+    setReaderMargin(next.margin);
+  };
+  const nextLabel = (() => {
+    const label = current?.chapter.chapterLabel;
+    const match = label?.match(/(\d+)/);
+    return match ? `Ch. ${Number(match[1]) + 1}` : undefined;
+  })();
+  const showToast = !!error && !addOpen && !(library.enabled && current);
+  const goTab = (next: Tab) => {
+    openSurface(null);
+    setTab(next);
+    if (next !== "library") setFocusBook(null);
+    window.scrollTo({ top: 0 });
+  };
 
   return (
-    <div className="flex h-dvh flex-col bg-[var(--color-bg)]">
-      <Header
-        showLibraryToggle
-        onOpenLibrary={() => setSidebarOpen(true)}
-        onOpenSettings={() => setDrawerOpen(true)}
-        playerBarVisible={playerBarVisible}
-        onTogglePlayerBar={() => setPlayerBarVisible((v) => !v)}
-        hasChapter={!!current}
-        hidden={headerHidden}
-        theme={theme}
-        onToggleTheme={toggleTheme}
-        viewMode={viewMode}
-        onViewMode={setViewMode}
-      />
+    <div className="min-h-dvh bg-[var(--color-bg)]">
+      <NavRail tab={surface ? null : tab} onTab={goTab} onAdd={() => setAddOpen(true)} theme={theme.resolved} />
 
-      {error && <Toast message={error} onClose={() => setError(null)} />}
-
-      <div
-        className={`grid w-full min-h-0 flex-1 gap-4 py-4 sm:px-6 lg:gap-6 lg:px-8 ${
-          playerBarVisible ? "px-4 lg:grid-cols-[300px_1fr]" : "px-0"
-        }`}
-      >
-        {playerBarVisible && (
-          <aside className="hidden min-h-0 lg:block">
-            <Sidebar
-              inputUrl={inputUrl}
-              onInputUrl={setInputUrl}
-              onSubmitUrl={onSubmit}
-              chapterLoading={chapterLoading}
-              history={libraryHistory}
-              account={account}
-              onPickHistory={pickHistory}
+      <main className="lg:pl-[88px]">
+        <div inert={!!surface} aria-hidden={surface ? true : undefined}
+          className="pt-safe mx-auto w-full max-w-[720px] px-5 pb-[172px] pt-6 lg:px-10 lg:pb-32 lg:pt-12">
+          {tab === "home" && (
+            <HomeScreen
+              books={books}
+              nowPlaying={nowPlaying}
+              narration={narration}
+              onResume={(url) => pickHistory(url, { play: true, surface: "player" })}
+              onRead={(url) => pickHistory(url, { surface: "reader" })}
+              onAdd={() => setAddOpen(true)}
+              onOpenLibrary={() => goTab("library")}
             />
-          </aside>
-        )}
-
-        <main className="flex min-h-0 flex-col gap-3">
-          {playback.preparing && <p role="status" className="px-4 text-sm text-[var(--color-muted)]">Preparing audio · you can read while you wait.</p>}
-          {current?.sessionId && !current.audioPending && !isPlaying && !playback.error && !error && <p role="status" className="px-4 text-sm text-[var(--color-accent)]">Audio ready · press Play whenever you like.</p>}
-          {(playback.error || (error && library.enabled)) && <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-border)] p-3 text-sm">
-            <span>{playback.error || error}{current?.audioPending && " You can keep reading."}</span>
-            <button className="shrink-0 text-[var(--color-accent)]" onClick={async () => {
-              setError(null);
-              if (playback.session) await authorizedFetch(`/api/playback-sessions/${playback.session.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "retry" }) });
-              void loadChapterFromUrl(current?.chapter.url || inputUrl, isPlaying, voice, !!current);
-            }}>Retry audio</button>
-          </div>}
-          {chapterLoading && <LoadingSkeleton />}
-          {!chapterLoading && !current && <EmptyState />}
-          {!chapterLoading && current && (
-            <>
-              <div className="min-h-0 flex-1">
-                {viewMode === "rsvp" ? (
-                  <RsvpPanel
-                    words={rsvpWords}
-                    index={Math.min(rsvpWordIndex, Math.max(0, rsvpWords.length - 1))}
-                    wpm={wpm}
-                    isPlaying={isRsvpPlaying}
-                    onIndexChange={setRsvpWordIndex}
-                    onComplete={() => setIsRsvpPlaying(false)}
-                    onTogglePlay={toggleRsvpPlay}
-                  />
-                ) : (
-                  <ReaderPanel
-                    chapterKey={current.chapter.url}
-                    chunks={current.chunks}
-                    currentChunkIndex={currentChunkIndex}
-                    onPickChunk={onPickChunk}
-                    readerFontSize={readerFontSize}
-                    readingMode={!playerBarVisible}
-                    followAudio={isPlaying}
-                    restorePosition={readerRestore}
-                    onPosition={(position) => { readerPositionRef.current = position; }}
-                    onUserScroll={() => setHeaderHidden(true)}
-                    canReachEnd={!!current.chapter.nextUrl}
-                    onReachedEnd={() => {
-                      const nextUrl = current.chapter.nextUrl;
-                      if (!nextUrl) return;
-                      void loadChapterFromUrl(nextUrl, isPlaying);
-                    }}
-                    header={
-                      <HeroCard
-                        title={current.chapter.bookTitle || current.chapter.title}
-                        source={current.chapter.source}
-                        chapterLabel={current.chapter.chapterLabel}
-                        currentPart={currentChunkIndex + 1}
-                        totalParts={current.chunks.length}
-                        canPrevChapter={!!current.chapter.prevUrl}
-                        canNextChapter={!!current.chapter.nextUrl}
-                        onPrevChapter={goPrevChapter}
-                        onNextChapter={goNextChapter}
-                      />
-                    }
-                  />
-                )}
-              </div>
-              {shortcutsOpen && (
-                <div className="grid shrink-0 gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)] p-3 text-xs text-[var(--color-muted)]">
-                  <div>Space — Play/Pause</div>
-                  <div>Arrow Left/Right — -/+ 15s</div>
-                  <div>[ / ] — Previous/Next chapter</div>
-                  <div>? — Toggle this help</div>
-                </div>
-              )}
-            </>
           )}
-        </main>
-      </div>
+          {tab === "library" && (
+            <LibraryScreen
+              books={books}
+              currentUrl={current?.chapter.url}
+              currentStatus={audioState === "failed" ? { status: "failed", label: "Audio failed" }
+                : audioState === "preparing" ? { status: "working", label: "Preparing audio" }
+                : audioState === "none" ? null : { status: "ready", label: "Audio ready" }}
+              focusKey={focusBook}
+              banner={library.conflict ? (
+                <div role="alert" className="rounded-2xl bg-[var(--color-working-soft)] p-4 text-sm">
+                  <p className="font-medium">Another device saved a different stopping point.</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button type="button" className="h-10 rounded-xl bg-[var(--color-accent)] px-4 text-[13px] font-semibold text-[var(--color-on-accent)]" onClick={() => library.resolve(false)}>Use saved position</button>
+                    <button type="button" className="h-10 rounded-xl border border-[var(--color-border-strong)] px-4 text-[13px] font-semibold" onClick={() => library.resolve(true)}>Keep this device</button>
+                  </div>
+                </div>
+              ) : undefined}
+              onPick={(url) => pickHistory(url)}
+              onResume={(url) => pickHistory(url, { play: true, surface: "player" })}
+              onAdd={() => setAddOpen(true)}
+            />
+          )}
+          {tab === "search" && (
+            <SearchScreen
+              books={books}
+              openChapter={current ? { title: current.chapter.chapterLabel || current.chapter.title, chunks: current.chunks } : null}
+              onPickChapter={(url) => pickHistory(url, { surface: "reader" })}
+              onPickBook={(key) => { setFocusBook(key); goTab("library"); setFocusBook(key); }}
+              onPickChunk={(i) => {
+                readerPositionRef.current = { chunk: i, offset: 0 };
+                setReaderRestore({ chunk: i, offset: 0 });
+                if (current?.audioPending || !isPlaying) setCurrentChunkIndex(i);
+                openSurface("reader");
+              }}
+            />
+          )}
+          {tab === "you" && (
+            <YouScreen
+              account={{
+                enabled: library.enabled,
+                ready: library.ready,
+                email: library.user?.email,
+                status: titleRepair.status ?? library.status,
+                conflict: library.conflict,
+                bookCount: books.length,
+                onSignOut: signOut,
+                onResolve: library.resolve,
+              }}
+              voice={voice}
+              voices={VOICES}
+              onVoice={setVoice}
+              playbackRate={playbackRate}
+              onPlaybackRate={setPlaybackRate}
+              prefs={readerPrefs}
+              onPrefs={setReaderPrefs}
+              theme={theme.preference}
+              onTheme={theme.setPreference}
+              mediaLog={mediaLog}
+              onClearMediaLog={() => {
+                mediaLogRef.current = [];
+                setMediaLog([]);
+                try { localStorage.removeItem(LS_MEDIA_LOG); } catch {}
+              }}
+            />
+          )}
+        </div>
 
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 z-30 bg-black/60 p-4 lg:hidden"
-          onClick={() => setSidebarOpen(false)}
-        >
-          <div
-            className="h-full max-w-sm"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <Sidebar
-              inputUrl={inputUrl}
-              onInputUrl={setInputUrl}
-              onSubmitUrl={onSubmit}
-              chapterLoading={chapterLoading}
-              history={libraryHistory}
-              account={account}
-              onPickHistory={pickHistory}
+        {surface && (
+          <div className="fixed inset-0 z-40 bg-[var(--color-bg)] lg:left-[88px]">
+            {chapterLoading || !current ? (
+              <div className="pt-safe h-full overflow-y-auto">
+                <div className="flex h-14 items-center px-2">
+                  <button type="button" onClick={() => openSurface(null)} className="h-11 rounded-full px-4 text-sm font-medium text-[var(--color-accent-text)] hover:bg-[var(--color-hover)]">Close</button>
+                </div>
+                <LoadingSkeleton />
+              </div>
+            ) : surface === "reader" ? (
+              <ReaderScreen
+                chapterKey={current.chapter.url}
+                bookTitle={nowPlaying!.bookTitle}
+                chapterLabel={current.chapter.chapterLabel}
+                chapterTitle={current.chapter.title}
+                source={current.chapter.source}
+                chunks={current.chunks}
+                currentChunkIndex={currentChunkIndex}
+                prefs={readerPrefs}
+                audio={audioState}
+                followAudio={isPlaying}
+                restorePosition={readerRestore}
+                onPosition={(position) => { readerPositionRef.current = position; }}
+                status={statusBanner}
+                totalSeconds={(timing?.totalDuration ?? current.totalDuration) / (playbackRate || 1)}
+                canPrev={!!current.chapter.prevUrl}
+                canNext={!!current.chapter.nextUrl}
+                nextLabel={nextLabel}
+                onPickChunk={onPickChunk}
+                onReachedEnd={() => {
+                  const nextUrl = current.chapter.nextUrl;
+                  if (!nextUrl) return;
+                  void loadChapterFromUrl(nextUrl, isPlaying);
+                }}
+                onBack={() => openSurface(null)}
+                onChapters={() => { setFocusBook(currentBook?.key ?? null); goTab("library"); setFocusBook(currentBook?.key ?? null); }}
+                onPrev={goPrevChapter}
+                onNext={goNextChapter}
+                onListen={() => void listenFromHere()}
+                onPause={pause}
+                onOpenPlayer={() => openSurface("player")}
+                onSettings={() => setReaderSettingsOpen(true)}
+              />
+            ) : (
+              <NowPlayingScreen
+                nowPlaying={nowPlaying!}
+                voiceName={voiceName}
+                canPlay={!current.audioPending && !chapterLoading}
+                isPlaying={isPlaying}
+                isBuffering={isBuffering}
+                hasError={!!error}
+                status={statusBanner}
+                canPrev={!!current.chapter.prevUrl}
+                canNext={!!current.chapter.nextUrl}
+                nextReady={!!current.sessionId && !!playback.session?.chapters.some((c) => c.chapter.url === current.chapter.nextUrl)}
+                parts={{ current: currentChunkIndex + 1, total: current.chunks.length }}
+                onClose={() => openSurface(null)}
+                onTogglePlay={() => void togglePlay()}
+                onSeek={seekAbsolute}
+                onSkip={seekSeconds}
+                onPrev={goPrevChapter}
+                onNext={goNextChapter}
+                onPickPart={onPickChunk}
+                onRead={() => openSurface("reader")}
+                sleep={sleep}
+                sleepRemainingMs={sleepRemainingMs}
+                onSleepSet={setSleep}
+                onSleepCancel={cancelSleep}
+                playbackRate={playbackRate}
+                onPlaybackRate={setPlaybackRate}
+              />
+            )}
+          </div>
+        )}
+      </main>
+
+      {nowPlaying && !surface && (
+        <div className="fixed inset-x-2.5 bottom-[calc(76px+env(safe-area-inset-bottom,0px))] z-30 lg:bottom-5 lg:left-[calc(88px+1.25rem)] lg:right-5">
+          <div className="mx-auto max-w-[680px]">
+            <MiniPlayer
+              nowPlaying={nowPlaying}
+              audio={audioState}
+              isBuffering={isBuffering}
+              errorText={audioMessage}
+              onOpen={() => openSurface("player")}
+              onTogglePlay={() => void togglePlay()}
+              onRead={() => openSurface("reader")}
+              onRetry={() => void retryAudio()}
             />
           </div>
         </div>
       )}
+
+      {!surface && <BottomNav tab={tab} onTab={goTab} onAdd={() => setAddOpen(true)} />}
+
+      {showToast && <Toast message={error!} onClose={() => setError(null)} />}
+
+      {shortcutsOpen && (
+        <div role="dialog" aria-label="Keyboard shortcuts" className="fixed bottom-6 right-6 z-[60] hidden w-64 rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-4 text-[13px] shadow-[0_20px_40px_-12px_var(--color-shadow)] sm:block">
+          <p className="eyebrow mb-3">Shortcuts</p>
+          <div className="grid gap-1.5 text-[var(--color-muted)]">
+            <div>Space — Play/Pause</div>
+            <div>Arrow Left/Right — −/+ 15s</div>
+            <div>[ / ] — Previous/Next chapter</div>
+            <div>? — Toggle this help</div>
+          </div>
+        </div>
+      )}
+
+      <AddSheet
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        url={inputUrl}
+        onUrl={setInputUrl}
+        loading={chapterLoading}
+        error={error}
+        loadedUrl={loadedRequest}
+        onSubmit={(url) => { setLoadedRequest(""); void loadChapterFromUrl(url, false); }}
+        onLoaded={() => { setAddOpen(false); openSurface("reader"); }}
+      />
+
+      <ReaderSettingsSheet
+        open={readerSettingsOpen}
+        onClose={() => setReaderSettingsOpen(false)}
+        prefs={readerPrefs}
+        onPrefs={setReaderPrefs}
+        theme={theme.preference}
+        onTheme={theme.setPreference}
+      />
 
       <audio
         ref={audioRef}
@@ -1581,82 +1644,6 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
         }}
         preload="auto"
         playsInline
-      />
-
-      {playerBarVisible && viewMode === "rsvp" && (
-        <RsvpControls
-          hasChapter={!!current}
-          isPlaying={isRsvpPlaying}
-          wordIndex={rsvpWordIndex}
-          totalWords={rsvpWords.length}
-          wpm={wpm}
-          onTogglePlay={toggleRsvpPlay}
-          onSkipWords={skipRsvpWords}
-          onSeekWord={seekRsvpWord}
-          onWpm={setWpm}
-        />
-      )}
-      {playerBarVisible && viewMode !== "rsvp" && (
-        <PlayerBar
-          hasChapter={!!current && !current.audioPending && !chapterLoading}
-          isPlaying={isPlaying}
-          progressPercent={progressPercent}
-          currentTime={chunkPosition}
-          duration={chunkDuration || (currentChunk?.estDuration ?? 0)}
-          onSeek={(next) => {
-            if (!current) return;
-            seekAbsolute((timing?.cumDurations[currentChunkIndex] ?? 0) + next);
-          }}
-          onTogglePlay={togglePlay}
-          onSkipBack={() => seekSeconds(-15)}
-          onSkipFwd={() => seekSeconds(15)}
-          currentChunkIndex={currentChunkIndex}
-          totalChunks={current?.chunks.length ?? 0}
-          isBuffering={isBuffering}
-          hasError={!!error}
-          prefetchReady={!!current?.sessionId && !!playback.session?.chapters.some((c) => c.chapter.url === current.chapter.nextUrl)}
-          onPickChunk={onPickChunk}
-          sleep={sleep}
-          sleepRemainingMs={sleepRemainingMs}
-          onSleepSet={setSleep}
-          onSleepCancel={cancelSleep}
-          playbackRate={playbackRate}
-          onPlaybackRate={setPlaybackRate}
-        />
-      )}
-
-      {!playerBarVisible && current && (
-        <button
-          onClick={() => setPlayerBarVisible(true)}
-          aria-label="Show player"
-          className="fixed bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border border-[var(--color-border)] bg-[var(--color-panel)]/90 px-4 py-2 text-xs font-medium text-[var(--color-text)]/90 shadow-lg backdrop-blur-md transition hover:border-white/20 hover:text-[var(--color-text)]"
-        >
-          <span
-            aria-hidden
-            className={`inline-block h-1.5 w-1.5 rounded-full ${
-              isPlaying
-                ? "bg-[var(--color-accent)] animate-pulse"
-                : "bg-[var(--color-muted)]"
-            }`}
-          />
-          Show player
-        </button>
-      )}
-
-      <SettingsDrawer
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        voice={voice}
-        onVoice={setVoice}
-        voices={VOICES}
-        readerFontSize={readerFontSize}
-        onReaderFontSize={setReaderFontSize}
-        mediaLog={mediaLog}
-        onClearMediaLog={() => {
-          mediaLogRef.current = [];
-          setMediaLog([]);
-          try { localStorage.removeItem(LS_MEDIA_LOG); } catch {}
-        }}
       />
     </div>
   );

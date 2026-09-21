@@ -6,14 +6,33 @@ import type { Chunk } from "@/components/player/types";
 
 const OVERSCROLL_THRESHOLD = 160;
 
+export type ReaderFace = "serif" | "sans";
+export type ReaderMargin = "narrow" | "medium" | "wide";
+
+const MARGINS: Record<ReaderMargin, string> = {
+  narrow: "max-w-[760px] px-4 sm:px-6",
+  medium: "max-w-[680px] px-6 sm:px-8",
+  wide: "max-w-[600px] px-8 sm:px-10",
+};
+
 export function ReaderPanel(props: {
   chapterKey: string;
   chunks: Chunk[];
   currentChunkIndex: number;
   onPickChunk: (i: number) => void;
   readerFontSize: number;
+  lineHeight?: number;
+  face?: ReaderFace;
+  margin?: ReaderMargin;
   header?: ReactNode;
-  onUserScroll?: () => void;
+  footer?: ReactNode;
+  /** User scrolled by hand: "down" reads on, "up" looks back. */
+  onUserScroll?: (direction: "up" | "down") => void;
+  onScrollProgress?: (fraction: number) => void;
+  /** While chrome is hidden the first tap only brings it back. */
+  chromeHidden?: boolean;
+  onRevealChrome?: () => void;
+  nextLabel?: string;
   readingMode?: boolean;
   followAudio?: boolean;
   canReachEnd?: boolean;
@@ -27,8 +46,15 @@ export function ReaderPanel(props: {
     currentChunkIndex,
     onPickChunk,
     readerFontSize,
+    lineHeight = 1.75,
+    face = "serif",
+    margin = "medium",
     header,
+    footer,
     onUserScroll,
+    onScrollProgress,
+    chromeHidden = false,
+    onRevealChrome,
     readingMode = false,
     followAudio = true,
     canReachEnd = false,
@@ -107,17 +133,34 @@ export function ReaderPanel(props: {
 
   // Fire `onUserScroll` only on user-initiated scroll gestures (wheel or
   // touchmove). Skips programmatic scrollIntoView above.
+  const gestureAtRef = useRef(0);
+  const lastTopRef = useRef(0);
+  const onUserScrollRef = useRef(onUserScroll);
+  useEffect(() => {
+    onUserScrollRef.current = onUserScroll;
+  }, [onUserScroll]);
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el || !onUserScroll) return;
-    const handler = () => onUserScroll();
-    el.addEventListener("wheel", handler, { passive: true });
-    el.addEventListener("touchmove", handler, { passive: true });
-    return () => {
-      el.removeEventListener("wheel", handler);
-      el.removeEventListener("touchmove", handler);
+    if (!el) return;
+    const mark = () => { gestureAtRef.current = Date.now(); };
+    const onScroll = () => {
+      const top = el.scrollTop;
+      const delta = top - lastTopRef.current;
+      if (Math.abs(delta) < 6) return;
+      lastTopRef.current = top;
+      if (Date.now() - gestureAtRef.current < 400) onUserScrollRef.current?.(delta > 0 ? "down" : "up");
     };
-  }, [onUserScroll]);
+    el.addEventListener("wheel", mark, { passive: true });
+    el.addEventListener("touchmove", mark, { passive: true });
+    el.addEventListener("keydown", mark);
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      el.removeEventListener("wheel", mark);
+      el.removeEventListener("touchmove", mark);
+      el.removeEventListener("keydown", mark);
+      el.removeEventListener("scroll", onScroll);
+    };
+  }, []);
 
   // Reset overscroll state whenever a new chapter's chunks arrive so the arc
   // doesn't start pre-filled on the next page.
@@ -208,60 +251,50 @@ export function ReaderPanel(props: {
   return (
     <div
       ref={scrollRef}
+      tabIndex={-1}
       onScroll={() => {
         const container = scrollRef.current;
-        if (!container || (!readingMode && followAudio) || !props.onPosition) return;
+        if (!container) return;
+        const range = container.scrollHeight - container.clientHeight;
+        onScrollProgress?.(range > 0 ? Math.min(1, container.scrollTop / range) : 0);
+        if ((!readingMode && followAudio) || !props.onPosition) return;
         const top = container.getBoundingClientRect().top;
         const index = refs.current.findIndex((node) => node && node.getBoundingClientRect().bottom > top);
         const node = refs.current[index];
         if (node) props.onPosition({ chunk: index, offset: Math.max(0, Math.min(1, (top - node.getBoundingClientRect().top) / node.offsetHeight)) });
       }}
-      className={
-        readingMode
-          ? "relative h-full overflow-y-auto px-4 py-6 sm:px-8 sm:py-8"
-          : "relative h-full overflow-y-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] px-5 py-6 sm:px-10 sm:py-8"
-      }
+      onClickCapture={(e) => {
+        if (!chromeHidden || !onRevealChrome) return;
+        e.stopPropagation();
+        e.preventDefault();
+        onRevealChrome();
+      }}
+      className="relative h-full overflow-y-auto overscroll-contain outline-none"
       style={{ fontSize: `${readerFontSize}px` }}
     >
-      <div className={`mx-auto ${readingMode ? "max-w-7xl" : "max-w-5xl"}`}>
+      <div className={`mx-auto pb-40 pt-6 sm:pt-10 ${MARGINS[margin]}`}>
         {header}
-        <div className="font-serif">
+        <div className={face === "serif" ? "font-serif" : "font-sans"}>
           {chunks.map((c) => {
-            const isCurrent = c.index === currentChunkIndex;
-            const isPast = c.index < currentChunkIndex;
+            const isCurrent = followAudio && !readingMode && c.index === currentChunkIndex;
             return (
               <button
                 ref={(el) => {
                   refs.current[c.index] = el;
                 }}
                 key={c.index}
-                onClick={() => {
-                  onPickChunk(c.index);
-                  if (readingMode)
-                    refs.current[c.index]?.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
-                }}
-                className={`group relative block w-full rounded-lg px-3 py-2 text-left transition ${
-                  !readingMode && isCurrent
-                    ? "bg-[var(--color-accent-soft)]"
-                    : "hover:bg-white/[0.03]"
-                }`}
+                type="button"
+                onClick={() => onPickChunk(c.index)}
+                aria-current={isCurrent || undefined}
+                className="relative -mx-3 block w-[calc(100%+1.5rem)] cursor-text rounded-md px-3 text-left"
               >
-                {!readingMode && isCurrent && (
-                  <span
-                    aria-hidden
-                    className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-[var(--color-accent)]"
-                  />
-                )}
+                <span
+                  aria-hidden
+                  className={`absolute -left-1 bottom-[0.6em] top-[0.35em] w-[3px] rounded-full bg-[var(--color-accent)] transition-opacity duration-300 ${isCurrent ? "opacity-100" : "opacity-0"}`}
+                />
                 <p
-                  className={`whitespace-pre-wrap leading-[1.7] tracking-[-0.003em] ${
-                    readingMode
-                      ? "text-[var(--color-text)]/90"
-                      : isCurrent
-                        ? "text-[var(--color-text)]"
-                        : isPast
-                          ? "text-[var(--color-text)]/55"
-                          : "text-[var(--color-text)]/80"
-                  }`}
+                  className="mb-[1.05em] whitespace-pre-wrap tracking-[-0.003em] text-[var(--color-text)]/[0.88]"
+                  style={{ lineHeight }}
                 >
                   {c.text}
                 </p>
@@ -269,73 +302,24 @@ export function ReaderPanel(props: {
             );
           })}
         </div>
-        {canReachEnd && <ChapterEndHint progress={progress} />}
+        {canReachEnd && <ChapterEndHint progress={progress} label={props.nextLabel} />}
+        {footer}
       </div>
     </div>
   );
 }
 
-function ChapterEndHint(props: { progress: number }) {
+function ChapterEndHint(props: { progress: number; label?: string }) {
   const ready = props.progress >= 1;
-  const R = 17;
-  const CIRC = 2 * Math.PI * R;
   return (
-    <div className="mt-12 mb-6 flex select-none flex-col items-center gap-2 text-center">
-      <div className="relative h-10 w-10">
-        <svg viewBox="0 0 40 40" className="h-full w-full">
-          <circle
-            cx="20"
-            cy="20"
-            r={R}
-            fill="none"
-            stroke="var(--color-border)"
-            strokeWidth="2"
-          />
-          <circle
-            cx="20"
-            cy="20"
-            r={R}
-            fill="none"
-            stroke="var(--color-accent)"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeDasharray={CIRC}
-            strokeDashoffset={CIRC * (1 - props.progress)}
-            transform="rotate(-90 20 20)"
-            style={{ transition: "stroke-dashoffset 120ms linear" }}
-          />
-        </svg>
-        <div className="absolute inset-0 grid place-items-center text-[var(--color-text)]/75">
-          {ready ? (
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
-            >
-              <path d="M20 6 9 17l-5-5" />
-            </svg>
-          ) : (
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
-            >
-              <path d="M12 5v14M6 13l6 6 6-6" />
-            </svg>
-          )}
-        </div>
+    <div className="mt-14 flex select-none flex-col items-center gap-3 font-sans">
+      <div className="flex w-full items-center gap-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-dim)]">
+        <span className="h-px flex-1 bg-[var(--color-border)]" />
+        <span>{ready ? "Opening next chapter" : props.label ? `Keep scrolling for ${props.label}` : "Keep scrolling for the next chapter"}</span>
+        <span className="h-px flex-1 bg-[var(--color-border)]" />
+      </div>
+      <div className="h-1 w-24 overflow-hidden rounded-full bg-[var(--color-border)]">
+        <div className="h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-100" style={{ width: `${props.progress * 100}%` }} />
       </div>
     </div>
   );

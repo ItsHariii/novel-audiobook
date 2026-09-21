@@ -14,7 +14,9 @@ export interface ChapterProgress {
   voice: string;
   readerChunk: number;
   readerOffset: number;
+  // Retained for the stored payload shape; the speed reader that used it is gone.
   wordIndex: number;
+  coverUrl?: string;
 }
 
 export interface ProgressRecord {

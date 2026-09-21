@@ -1,6 +1,11 @@
 import type { Chapter } from "@/lib/types";
 
-export type ViewMode = "reader" | "rsvp" | "audio";
+export type ViewMode = "reader" | "audio";
+
+/** Old saves may still say "rsvp" (speed-reading mode, since removed). */
+export function normalizeMode(mode: unknown): ViewMode {
+  return mode === "audio" ? "audio" : "reader";
+}
 
 export interface Chunk {
   index: number;
@@ -31,4 +36,5 @@ export interface HistoryItem {
   lastAt: number;
   bookTitle?: string;
   chapterLabel?: string;
+  coverUrl?: string;
 }

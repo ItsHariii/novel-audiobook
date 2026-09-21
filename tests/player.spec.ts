@@ -92,6 +92,7 @@ test("private library resumes and crosses chapters without reloading its source"
   await expect.poll(() => audio.evaluate((el: HTMLAudioElement) => el.readyState)).toBeGreaterThan(0);
   await expect.poll(() => audio.evaluate((el: HTMLAudioElement) => el.currentTime)).toBeCloseTo(2, 0);
   const src = await audio.getAttribute("src");
+  await page.getByRole("button", { name: "Open player" }).click();
   await page.getByRole("button", { name: "Playback speed: 1.15x" }).click();
   await page.getByRole("menuitem", { name: "2.5x", exact: true }).click();
   await page.getByRole("button", { name: "Play", exact: true }).click();
@@ -101,6 +102,8 @@ test("private library resumes and crosses chapters without reloading its source"
   }
   await page.getByRole("button", { name: "Pause", exact: true }).click();
   expect(mock.sourceCreates()).toBe(1);
+  await page.getByRole("button", { name: "Minimise player" }).click();
+  await page.getByRole("button", { name: "You", exact: true }).click();
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /Continue ·/ })).toHaveCount(0);
@@ -117,10 +120,15 @@ test("full-screen sign-in leads to the mobile library", async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: "test-results/mobile-welcome.png", fullPage: true });
   await signIn(page);
-  await page.getByRole("button", { name: /library/i }).click();
-  await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Library", exact: true }).click();
+  await expect(page.getByRole("button", { name: /^Continue · / })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.screenshot({ path: "test-results/mobile-library.png", fullPage: true });
+  for (const theme of ["dark", "light"]) {
+    await page.evaluate((value) => document.documentElement.setAttribute("data-theme", value), theme);
+    await page.screenshot({ path: `test-results/mobile-library-${theme}.png`, fullPage: true, animations: "disabled" });
+  }
+  await page.getByRole("button", { name: "You", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
 });
 
 test("welcome handles sign-in errors and password visibility", async ({ page }) => {
@@ -155,8 +163,10 @@ test("a saved session opens the library directly", async ({ page }) => {
   await mockLibrary(page);
   await page.goto("/");
   await signIn(page);
+  await page.getByRole("button", { name: "You", exact: true }).click();
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
   await page.reload();
+  await page.getByRole("button", { name: "You", exact: true }).click();
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Welcome back." })).toHaveCount(0);
 });
@@ -168,8 +178,9 @@ test("text remains readable through audio preparation, failure and retry", async
   await page.goto("/");
   await signIn(page);
   await expect(page.locator("main").getByText("Chapter 1", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Read this chapter instead" }).click();
   await expect(page.getByText("Preparing audio · you can read while you wait.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Play", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: /Preparing audio/ })).toBeDisabled();
   expect(await page.locator("audio").getAttribute("src")).toBeNull();
   const reader = page.locator("main .overflow-y-auto");
   await reader.evaluate((el) => { el.scrollTop = 650; });
@@ -189,14 +200,17 @@ test("text remains readable through audio preparation, failure and retry", async
   await expect.poll(() => reader.evaluate((el) => el.scrollTop)).toBeGreaterThan(600);
   mock.setAudio("ready");
   await expect(page.getByText("Audio ready · press Play whenever you like.")).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByRole("button", { name: "Play", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Listen from here" })).toBeEnabled();
   await expect.poll(() => page.locator("audio").evaluate((el: HTMLAudioElement) => el.currentTime)).toBeCloseTo(2, 0);
   await expect.poll(() => reader.evaluate((el) => el.scrollTop)).toBeGreaterThan(600);
-  await page.getByRole("button", { name: "Play", exact: true }).click();
+  await page.getByRole("button", { name: "Listen from here" }).click();
   await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
   await reader.evaluate((el) => { el.scrollTop = 650; });
   await page.getByRole("button", { name: "Pause", exact: true }).click();
   await expect.poll(() => reader.evaluate((el) => el.scrollTop)).toBeGreaterThan(600);
-  await page.screenshot({ path: "test-results/read-while-audio-ready.png", fullPage: true });
+  for (const theme of ["dark", "light"]) {
+    await page.evaluate((value) => document.documentElement.setAttribute("data-theme", value), theme);
+    await page.screenshot({ path: `test-results/reader-${theme}.png`, animations: "disabled" });
+  }
   expect(errors).toEqual([]);
 });

@@ -20,6 +20,5 @@ export function acknowledge(local: LocalProgress, sent: ChapterProgress, remote:
 
 export function writeLegacyPosition(p: ChapterProgress) {
   localStorage.setItem(`nab:pos:${p.chapterUrl}`, JSON.stringify({ time: p.audioTime, voice: p.voice }));
-  localStorage.setItem(`nab:rsvp:${p.chapterUrl}`, JSON.stringify({ wordIndex: p.wordIndex }));
   localStorage.setItem(`nab:reader:${p.chapterUrl}`, JSON.stringify({ chunk: p.readerChunk, offset: p.readerOffset }));
 }

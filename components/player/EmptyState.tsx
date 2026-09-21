@@ -1,30 +1,17 @@
-export function EmptyState() {
-  return (
-    <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] px-6 py-10 sm:px-10 sm:py-14">
-      <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-[var(--color-muted)]">
-        Welcome
-      </p>
-      <h2 className="mt-3 text-balance font-serif text-3xl font-medium leading-[1.15] tracking-tight sm:text-4xl">
-        Paste a chapter URL to start listening.
-      </h2>
-      <p className="mt-4 max-w-prose text-sm leading-relaxed text-[var(--color-muted)]">
-        Use the panel on the left to load any supported chapter URL. The player
-        will fetch, narrate, and auto-advance through chapters for you.
-      </p>
-      <div className="mt-6 grid gap-2 text-sm text-[var(--color-text)]/80 sm:grid-cols-3">
-        <Feature label="Auto-advance" />
-        <Feature label="Voice & speed control" />
-        <Feature label="Resume where you left off" />
-      </div>
-    </section>
-  );
-}
+import { BookIcon, PlusIcon } from "@/components/ui/icons";
+import { Button } from "@/components/ui/primitives";
 
-function Feature({ label }: { label: string }) {
+export function EmptyState({ onAdd }: { onAdd: () => void }) {
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-panel-2)] px-3 py-2">
-      <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-accent)]" />
-      <span>{label}</span>
-    </div>
+    <section className="flex flex-col items-center rounded-3xl border border-dashed border-[var(--color-border-strong)] px-6 py-12 text-center">
+      <div className="grid h-16 w-16 place-items-center rounded-2xl bg-[var(--color-accent-soft)] text-[var(--color-accent-text)]">
+        <BookIcon size={28} />
+      </div>
+      <h3 className="mt-5 font-serif text-[22px] font-medium">Your shelf is empty</h3>
+      <p className="mt-2 max-w-xs text-sm leading-relaxed text-[var(--color-muted)]">
+        Paste a link to any web novel chapter and Tome will find the rest, then read it aloud.
+      </p>
+      <Button className="mt-6" onClick={onAdd}><PlusIcon size={18} />Add your first novel</Button>
+    </section>
   );
 }

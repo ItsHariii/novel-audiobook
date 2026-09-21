@@ -1,21 +1,16 @@
 export function LoadingSkeleton() {
   return (
-    <div className="space-y-4">
-      <div className="animate-pulse rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] px-6 py-8">
-        <div className="h-3 w-24 rounded bg-white/10" />
-        <div className="mt-4 h-9 w-3/4 rounded bg-white/10" />
-        <div className="mt-3 h-3 w-28 rounded bg-white/10" />
+    <div role="status" aria-label="Loading chapter" className="mx-auto w-full max-w-[680px] px-5 py-10 sm:px-8">
+      <div className="relative h-2.5 w-24 overflow-hidden rounded-full bg-[var(--color-panel-2)]">
+        <span className="animate-tome-sweep absolute inset-y-0 left-0 w-1/2 bg-[var(--color-border-strong)]" />
       </div>
-      <div className="animate-pulse rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] px-6 py-6">
-        <div className="space-y-3">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div
-              key={i}
-              className="h-4 rounded bg-white/10"
-              style={{ width: `${70 + ((i * 7) % 25)}%` }}
-            />
-          ))}
-        </div>
+      <div className="mt-5 h-8 w-3/4 rounded-lg bg-[var(--color-panel-2)] animate-tome-pulse" />
+      <div className="mt-6 h-px bg-[var(--color-border)]" />
+      <div className="mt-8 space-y-3.5">
+        {Array.from({ length: 9 }).map((_, i) => (
+          <div key={i} className="h-3.5 rounded-full bg-[var(--color-panel-2)] animate-tome-pulse"
+            style={{ width: `${72 + ((i * 7) % 26)}%`, animationDelay: `${i * 80}ms` }} />
+        ))}
       </div>
     </div>
   );

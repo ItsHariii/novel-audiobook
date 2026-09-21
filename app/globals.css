@@ -1,34 +1,68 @@
 @import "tailwindcss";
 
+/* Ink — the default dark palette. Warm near-black steps with a lavender
+   accent bright enough (8:1 on base) to carry small label text. */
 @theme {
-  --color-bg: #050505;
-  --color-panel: #0f0f10;
-  --color-panel-2: #161618;
-  --color-border: #232326;
-  --color-text: #f5f5f5;
-  --color-muted: #9a9a9e;
-  --color-accent: #a78bfa;
-  --color-accent-hover: #b89cff;
-  --color-accent-soft: rgba(167, 139, 250, 0.16);
+  --color-canvas: #0a0910;
+  --color-bg: #0f0e14;
+  --color-panel: #17151e;
+  --color-panel-2: #201d29;
+  --color-border: #2b2735;
+  --color-border-strong: #393447;
+  --color-text: #f3f1f7;
+  --color-muted: #a49eb2;
+  --color-dim: #948da1;
+  --color-accent: #b39dff;
+  --color-accent-hover: #c9baff;
+  --color-accent-soft: rgba(179, 157, 255, 0.14);
+  --color-accent-text: #c9baff;
+  --color-on-accent: #14121b;
+  --color-ready: #7fe0ae;
+  --color-ready-soft: rgba(127, 224, 174, 0.14);
+  --color-working: #f2c877;
+  --color-working-soft: rgba(242, 200, 119, 0.14);
+  --color-failed: #ff9b9b;
+  --color-failed-soft: rgba(255, 155, 155, 0.14);
+  --color-hover: rgba(255, 255, 255, 0.04);
+  --color-scrim: rgba(5, 4, 8, 0.62);
+  --color-glass: rgba(32, 29, 41, 0.93);
+  --color-nav: rgba(15, 14, 20, 0.94);
+  --color-shadow: rgba(0, 0, 0, 0.8);
 }
 
 :root {
   color-scheme: dark;
 }
 
-/* Warm off-white "parchment" theme — picked to feel like book pages rather
-   than a stark white background. Purple accent is darkened so it keeps
-   contrast on the cream surface. */
+/* Parchment — warm cream steps so cards separate from the page without a
+   border on every edge. Accent and status colours are deepened to keep
+   contrast on cream. */
 :root[data-theme="light"] {
-  --color-bg: #faf5e6;
-  --color-panel: #f3ecd5;
-  --color-panel-2: #ece3c7;
-  --color-border: #ddd1ac;
-  --color-text: #24201a;
-  --color-muted: #6b6456;
-  --color-accent: #6d4fef;
-  --color-accent-hover: #5a3ce0;
-  --color-accent-soft: rgba(109, 79, 239, 0.14);
+  --color-canvas: #f2ead8;
+  --color-bg: #faf4e6;
+  --color-panel: #fdf9ef;
+  --color-panel-2: #ece2cc;
+  --color-border: #dccfae;
+  --color-border-strong: #cbbb93;
+  --color-text: #221f19;
+  --color-muted: #5a5346;
+  --color-dim: #655d50;
+  --color-accent: #5b3fd6;
+  --color-accent-hover: #4a30c0;
+  --color-accent-soft: rgba(91, 63, 214, 0.12);
+  --color-accent-text: #4a30c0;
+  --color-on-accent: #ffffff;
+  --color-ready: #1a6c47;
+  --color-ready-soft: rgba(29, 122, 79, 0.12);
+  --color-working: #855609;
+  --color-working-soft: rgba(154, 100, 16, 0.12);
+  --color-failed: #b3322f;
+  --color-failed-soft: rgba(179, 50, 47, 0.1);
+  --color-hover: rgba(34, 31, 25, 0.06);
+  --color-scrim: rgba(34, 31, 25, 0.38);
+  --color-glass: rgba(253, 249, 239, 0.94);
+  --color-nav: rgba(250, 244, 230, 0.94);
+  --color-shadow: rgba(60, 45, 20, 0.28);
   color-scheme: light;
 }
 
@@ -63,12 +97,56 @@ body {
 
 *:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 60%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 70%, transparent);
 }
 
 .tabular {
   font-variant-numeric: tabular-nums;
 }
+
+.eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-dim);
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+@keyframes tome-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+@keyframes tome-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(220%); }
+}
+@keyframes tome-eq {
+  0%, 100% { height: 5px; }
+  50% { height: 14px; }
+}
+@keyframes tome-rise {
+  from { transform: translateY(16px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.animate-tome-pulse { animation: tome-pulse 1.4s ease-in-out infinite; }
+.animate-tome-sweep { animation: tome-sweep 1.3s ease-in-out infinite; }
+.animate-tome-rise { animation: tome-rise 220ms ease-out both; }
 
 @media (prefers-reduced-motion: reduce) {
   * {
@@ -84,20 +162,21 @@ input[type="range"] {
   appearance: none;
   background: transparent;
   cursor: pointer;
+  --fill: 0%;
 }
 
 input[type="range"]::-webkit-slider-runnable-track {
-  height: 3px;
+  height: 4px;
   border-radius: 9999px;
-  background: var(--color-border);
+  background: linear-gradient(to right, var(--color-accent) var(--fill), var(--color-border) var(--fill));
 }
 
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  margin-top: -5px;
-  height: 13px;
-  width: 13px;
+  margin-top: -6px;
+  height: 16px;
+  width: 16px;
   border-radius: 9999px;
   background: var(--color-accent);
   border: none;
@@ -105,34 +184,26 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 input[type="range"]::-moz-range-track {
-  height: 3px;
+  height: 4px;
   border-radius: 9999px;
   background: var(--color-border);
 }
 
+input[type="range"]::-moz-range-progress {
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--color-accent);
+}
+
 input[type="range"]::-moz-range-thumb {
-  height: 13px;
-  width: 13px;
+  height: 16px;
+  width: 16px;
   border-radius: 9999px;
   background: var(--color-accent);
   border: none;
 }
 
-/* Light theme: flip the white-alpha hover tints to a dark-alpha so buttons
-   still show a subtle "pressed" feedback on cream surfaces. Targets the
-   exact utility classes used across the player components. */
-:root[data-theme="light"] .hover\:bg-white\/5:hover {
-  background-color: rgba(36, 32, 26, 0.07);
-}
-:root[data-theme="light"] .hover\:bg-white\/\[0\.03\]:hover {
-  background-color: rgba(36, 32, 26, 0.05);
-}
-:root[data-theme="light"] .hover\:bg-white\/\[0\.04\]:hover {
-  background-color: rgba(36, 32, 26, 0.06);
-}
-:root[data-theme="light"] .hover\:border-white\/20:hover {
-  border-color: rgba(36, 32, 26, 0.28);
-}
-:root[data-theme="light"] .bg-white\/10 {
-  background-color: rgba(36, 32, 26, 0.1);
+input[type="range"]:disabled {
+  cursor: default;
+  opacity: 0.45;
 }

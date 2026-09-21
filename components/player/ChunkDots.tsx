@@ -28,7 +28,7 @@ function Row(props: {
   statusOf?: (i: number) => "pending" | "loading" | "ready" | "error";
 }) {
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex flex-wrap items-center justify-center gap-2.5">
       {props.indexes.map((i) => {
         const isCurrent = i === props.current;
         const isPlayed = i < props.current;
@@ -38,14 +38,14 @@ function Row(props: {
             key={i}
             onClick={() => props.onPick(i)}
             aria-label={`Go to part ${i + 1}`}
-            className={`h-1.5 rounded-full transition-all ${
+            className={`relative h-2 rounded-full transition-all after:absolute after:-inset-2 after:content-[''] ${
               isCurrent
-                ? "w-4 bg-[var(--color-accent)]"
+                ? "w-5 bg-[var(--color-accent)]"
                 : isPlayed
-                  ? "w-1.5 bg-[var(--color-text)]/55 hover:bg-[var(--color-text)]/80"
+                  ? "w-2 bg-[var(--color-muted)] hover:bg-[var(--color-text)]"
                   : status === "error"
-                    ? "w-1.5 bg-red-500/70"
-                    : "w-1.5 bg-[var(--color-text)]/15 hover:bg-[var(--color-text)]/35"
+                    ? "w-2 bg-[var(--color-failed)]"
+                    : "w-2 bg-[var(--color-border-strong)] hover:bg-[var(--color-dim)]"
             }`}
           />
         );

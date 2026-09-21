@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { browserSupabase } from "@/lib/supabase/browser";
-import type { HistoryItem } from "@/components/player/types";
+import { normalizeMode, type HistoryItem } from "@/components/player/types";
 import { acknowledge, type ProgressMap, writeLegacyPosition } from "./local";
 import { bookKey, type ChapterProgress, type ProgressRecord } from "./types";
 
@@ -35,7 +35,7 @@ export function useLibrary() {
       return [{ url: p.chapterUrl, title: p.title, source: p.source, coverSeed: p.bookTitle || p.title,
         bookTitle: p.bookTitle, chapterLabel: p.chapterLabel, bookId: p.bookKey,
         lastAt: local.pending ? local.modifiedAt ?? 0 : local.record ? Date.parse(local.record.updated_at) : 0,
-        audioTime: p.audioTime, mode: p.mode }];
+        audioTime: p.audioTime, mode: normalizeMode(p.mode), coverUrl: p.coverUrl }];
     }).sort((a, b) => b.lastAt - a.lastAt));
   }, []);
 

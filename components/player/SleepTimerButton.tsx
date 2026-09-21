@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { menuClass, menuItemClass, tileClass } from "@/components/player/PlaybackSpeedButton";
 
 export type SleepMode =
   | { kind: "time"; endsAt: number }
@@ -55,24 +56,18 @@ export function SleepTimerButton(props: {
         aria-expanded={open}
         aria-label={active ? `Sleep timer: ${label}` : "Sleep timer"}
         title={active ? `Sleep timer: ${label}` : "Sleep timer"}
-        className={`flex h-10 items-center gap-1.5 rounded-full px-2.5 transition hover:bg-white/5 disabled:opacity-30 ${
-          active
-            ? "text-[var(--color-accent)]"
-            : "text-[var(--color-text)]/85 hover:text-[var(--color-text)]"
-        }`}
+        className={`${tileClass} ${active ? "text-[var(--color-accent-text)]" : "text-[var(--color-muted)]"}`}
       >
-        <MoonIcon />
-        {active && (
-          <span className="tabular text-[10.5px] font-medium">{label}</span>
-        )}
+        <span className={active ? "" : "text-[var(--color-text)]"}><MoonIcon /></span>
+        <span className="tabular">{active ? label : "Sleep"}</span>
       </button>
 
       {open && (
         <div
           role="menu"
-          className="absolute bottom-full right-0 z-30 mb-2 w-56 rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)] p-1.5 shadow-xl"
+          className={`${menuClass} w-56`}
         >
-          <div className="px-3 py-1.5 text-[10.5px] font-medium uppercase tracking-[0.18em] text-[var(--color-muted)]">
+          <div className="eyebrow px-3 py-2">
             Sleep timer
           </div>
           {PRESETS.map((p) => (
@@ -123,7 +118,7 @@ export function SleepTimerButton(props: {
                   props.onCancel();
                   setOpen(false);
                 }}
-                className="block w-full rounded-md px-3 py-1.5 text-left text-xs text-red-400 transition hover:bg-red-500/10"
+                className={`${menuItemClass} text-[var(--color-failed)]`}
               >
                 Cancel timer
               </button>
@@ -144,11 +139,7 @@ function MenuItem(props: {
     <button
       role="menuitem"
       onClick={props.onClick}
-      className={`flex w-full items-center justify-between rounded-md px-3 py-1.5 text-left text-xs transition hover:bg-white/5 ${
-        props.active
-          ? "text-[var(--color-accent)]"
-          : "text-[var(--color-text)]/90"
-      }`}
+      className={`${menuItemClass} ${props.active ? "text-[var(--color-accent-text)]" : "text-[var(--color-text)]"}`}
     >
       <span>{props.children}</span>
       {props.active && <span aria-hidden>●</span>}
@@ -159,7 +150,7 @@ function MenuItem(props: {
 function describe(sleep: SleepMode, ms: number): string {
   if (!sleep) return "";
   if (sleep.kind === "chunk") return "Part";
-  if (sleep.kind === "chapter") return "Chap";
+  if (sleep.kind === "chapter") return "Chapter";
   const total = Math.max(0, Math.ceil(ms / 1000));
   const m = Math.floor(total / 60);
   const s = total % 60;
