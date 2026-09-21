@@ -1,5 +1,6 @@
 import type { Chapter } from "@/lib/types";
 import type { ViewMode } from "@/components/player/types";
+import { meaningfulPathParent, normalizeBookTitle } from "./title";
 
 export interface ChapterProgress {
   chapterUrl: string;
@@ -35,12 +36,15 @@ export interface Book {
 export function bookKey(chapter: Pick<Chapter, "url" | "source" | "bookTitle" | "bookId">): string {
   if (chapter.bookId) return chapter.bookId;
   const url = new URL(chapter.url);
-  const parts = url.pathname.split("/").filter(Boolean);
-  const parent = parts.slice(0, -1).join("/");
-  if (parent && !/^(chapter|chapters|read|novel|novels|book|books)$/i.test(parent)) {
+  const parent = meaningfulPathParent(url.pathname);
+  if (parent) {
     return `${url.origin}/${parent}`;
   }
-  if (chapter.bookTitle) return `${url.origin}::${chapter.bookTitle.trim().toLowerCase()}`;
+  if (chapter.bookTitle) {
+    const norm = normalizeBookTitle(chapter.bookTitle);
+    if (norm) return `${url.origin}::${norm}`;
+    return `${url.origin}::${chapter.bookTitle.trim().toLowerCase()}`;
+  }
   // Unknown identity must not merge unrelated books under /chapter/.
   return `${url.origin}${url.pathname}`;
 }

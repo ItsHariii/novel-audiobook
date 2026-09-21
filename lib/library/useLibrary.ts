@@ -141,13 +141,19 @@ export function useLibrary() {
     return () => { cancelled = true; clearInterval(timer); window.removeEventListener("online", sync); window.removeEventListener("pagehide", sync); document.removeEventListener("visibilitychange", onVisibility); };
   }, [user?.id, client, flush, publish]);
 
-  const capture = useCallback((p: ChapterProgress) => {
+  const capture = useCallback((p: ChapterProgress, modifiedAt?: number) => {
     if (!userRef.current) return;
     const signature = JSON.stringify(p);
     if (latestCapture.current.get(p.chapterUrl) === signature) return;
     latestCapture.current.set(p.chapterUrl, signature);
     const local = map.current[p.chapterUrl] ?? {};
-    map.current[p.chapterUrl] = { ...local, pending: p, importing: false, modifiedAt: Date.now() };
+    map.current[p.chapterUrl] = {
+      ...local,
+      pending: p,
+      importing: false,
+      // Explicit 0 must be kept (legacy imports); only omit → now.
+      modifiedAt: modifiedAt !== undefined ? modifiedAt : Date.now(),
+    };
     publish();
   }, [publish]);
 

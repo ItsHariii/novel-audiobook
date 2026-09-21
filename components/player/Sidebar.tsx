@@ -3,6 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { bookKey } from "@/lib/library/types";
+import {
+  chapterNumber,
+  chapterNumberFromTitle,
+  cleanBookTitle,
+  isPlaceholderTitle,
+  normalizeBookTitle,
+  titleFromUrl,
+} from "@/lib/library/title";
 import type { HistoryItem } from "@/components/player/types";
 
 export function Sidebar(props: {
@@ -73,6 +81,10 @@ export function Sidebar(props: {
         )}
         {groups.map((group) => {
           const isOpen = !!expanded[group.key];
+          const sourceLine =
+            group.sources.length === 1
+              ? group.sources[0]
+              : `${group.sources[0]} +${group.sources.length - 1}`;
           return (
             <div key={group.key} className="rounded-lg">
               <button
@@ -84,9 +96,12 @@ export function Sidebar(props: {
                 <div className="min-w-0 flex-1">
                   <div className="line-clamp-1 text-sm font-medium">
                     {group.title}
+                    <span className="ml-1.5 text-[11px] font-normal text-[var(--color-muted)]">
+                      {group.chapters.length}
+                    </span>
                   </div>
                   <div className="mt-0.5 text-[11px] text-[var(--color-muted)]">
-                    {group.source}
+                    {sourceLine}
                   </div>
                 </div>
               </button>
@@ -114,8 +129,15 @@ export function Sidebar(props: {
                             {badge}
                           </span>
                         )}
-                        <span className="line-clamp-2 text-[12.5px] text-[var(--color-text)]/90">
-                          {label}
+                        <span className="min-w-0 flex-1">
+                          <span className="line-clamp-2 text-[12.5px] text-[var(--color-text)]/90">
+                            {label}
+                          </span>
+                          {group.sources.length > 1 && (
+                            <span className="mt-0.5 block text-[10px] text-[var(--color-muted)]">
+                              {item.source}
+                            </span>
+                          )}
                         </span>
                       </button>
                     );
@@ -135,38 +157,52 @@ export function Sidebar(props: {
 interface BookGroup {
   key: string;
   title: string;
-  source: string;
+  sources: string[];
   chapters: HistoryItem[];
   lastAt: number;
+  maxChapter: number;
   latest: HistoryItem;
 }
 
 function groupHistoryByBook(history: HistoryItem[]): BookGroup[] {
   const byKey = new Map<string, BookGroup>();
   for (const item of history) {
-    const key = deriveBookKey(item);
+    const display = displayBookTitle(item);
+    const norm = normalizeBookTitle(display);
+    const key = norm || deriveBookKey(item);
     const existing = byKey.get(key);
+    const chNum = chapterNumber(item);
     if (existing) {
       existing.chapters.push(item);
-      if (item.lastAt > existing.lastAt) { existing.lastAt = item.lastAt; existing.latest = item; }
+      if (!existing.sources.includes(item.source)) existing.sources.push(item.source);
+      if (item.lastAt > existing.lastAt) {
+        existing.lastAt = item.lastAt;
+        existing.latest = item;
+      }
+      if (chNum > existing.maxChapter) existing.maxChapter = chNum;
+      // Prefer a non-placeholder title if a later entry has a better one.
+      if (isPlaceholderTitle(existing.title) && !isPlaceholderTitle(display)) {
+        existing.title = display;
+      }
     } else {
       byKey.set(key, {
         key,
-        title: deriveBookTitle(item),
-        source: item.source,
+        title: display,
+        sources: [item.source],
         chapters: [item],
         lastAt: item.lastAt,
+        maxChapter: chNum,
         latest: item,
       });
     }
   }
   const groups = Array.from(byKey.values());
-  // Sort chapters within each group by numeric chapter order (fallback: recency).
   for (const g of groups) {
-    g.chapters.sort((a, b) => chapterOrder(a) - chapterOrder(b));
+    g.chapters.sort((a, b) => chapterNumber(a) - chapterNumber(b));
   }
-  // Most recently touched book bubbles to the top.
-  groups.sort((a, b) => b.lastAt - a.lastAt);
+  // Most recently touched book first; tie-break by highest chapter number so
+  // all-zero lastAt legacy imports still order sensibly.
+  groups.sort((a, b) => b.lastAt - a.lastAt || b.maxChapter - a.maxChapter);
   return groups;
 }
 
@@ -178,74 +214,24 @@ function deriveBookKey(item: HistoryItem): string {
   }
 }
 
-function deriveBookTitle(item: HistoryItem): string {
-  if (item.bookTitle) return item.bookTitle;
-  try {
-    const u = new URL(item.url);
-    const parts = u.pathname.split("/").filter(Boolean);
-    // Prefer the slug immediately before the chapter id; skip generic
-    // containers like "novel" / "novels" / "book" / "series".
-    const generic = new Set([
-      "novel",
-      "novels",
-      "book",
-      "books",
-      "series",
-      "manga",
-      "read",
-      "chapter",
-      "chapters",
-    ]);
-    const candidates = parts
-      .slice(0, -1)
-      .filter((p) => !generic.has(p.toLowerCase()));
-    const slug = candidates[candidates.length - 1] ?? parts[0] ?? u.hostname;
-    return prettifySlug(slug);
-  } catch {
-    return item.source;
+function displayBookTitle(item: HistoryItem): string {
+  if (item.bookTitle && !isPlaceholderTitle(item.bookTitle)) {
+    return cleanBookTitle(item.bookTitle);
   }
-}
-
-function prettifySlug(slug: string): string {
-  const cleaned = slug.replace(/[-_]+/g, " ").trim();
-  if (!cleaned) return slug;
-  return cleaned
-    .split(" ")
-    .map((w) => (w.length > 0 ? w[0].toUpperCase() + w.slice(1) : w))
-    .join(" ");
-}
-
-function chapterNumberFromTitle(title: string): number | null {
-  const m = title.match(/^\s*(?:chapter|ch\.?)?\s*(\d+)\b/i);
-  return m ? parseInt(m[1], 10) : null;
-}
-
-function chapterNumberFromUrl(url: string): number | null {
-  const m =
-    url.match(/chapter[-_]?(\d+)/i) ??
-    url.match(/\/(\d+)(?:[/#?]|$)/) ??
-    null;
-  return m ? parseInt(m[1], 10) : null;
-}
-
-function chapterOrder(item: HistoryItem): number {
-  if (item.chapterLabel) {
-    const fromLabel = chapterNumberFromTitle(item.chapterLabel);
-    if (fromLabel !== null) return fromLabel;
+  if (item.title && !isPlaceholderTitle(item.title)) {
+    const cleaned = cleanBookTitle(item.title);
+    if (cleaned && !isPlaceholderTitle(cleaned)) return cleaned;
   }
-  const fromTitle = chapterNumberFromTitle(item.title);
-  if (fromTitle !== null) return fromTitle;
-  const fromUrl = chapterNumberFromUrl(item.url);
-  if (fromUrl !== null) return fromUrl;
-  // Fallback: older entries first so the ordering is still deterministic.
-  return item.lastAt / 1000;
+  const fromUrl = titleFromUrl(item.url);
+  if (fromUrl) return fromUrl;
+  return item.source;
 }
 
 function splitChapterTitle(title: string): { badge: string | null; label: string } {
   const num = chapterNumberFromTitle(title);
   if (num === null) return { badge: null, label: title };
   const stripped = title
-    .replace(/^\s*(?:chapter|ch\.?)?\s*\d+\s*[—–\-:·•]*\s*/i, "")
+    .replace(/^\s*(?:chapter|ch\.?|ep(?:isode)?)?\s*\d+\s*[—–\-:·•]*\s*/i, "")
     .trim();
   return {
     badge: `#${num}`,

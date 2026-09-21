@@ -1,11 +1,16 @@
 import type { CheerioAPI, Cheerio } from "cheerio";
 import type { AnyNode } from "domhandler";
+import { cleanBookTitle, isPlaceholderTitle } from "@/lib/library/title";
 
 const JUNK_TEXT_RE =
   /^(reading settings|size|spacing|reset to default|tap the text|compact|normal|relaxed|dm sans|lora|jetbrains|comfortaa|previous|next|prev|home|chapter \d+\s*\/\s*\d+)$/i;
 
+/** True when the whole string is (or starts as) a chapter label. */
 const CHAPTER_LABEL_RE = /^\s*(?:chapter|ch\.?|ep|episode)\s*\d+/i;
+/** True when a chapter label appears anywhere in the string. */
+const CHAPTER_ANYWHERE_RE = /(?:^|\b)(?:chapter|ch\.?|ep|episode)\s*\d+/i;
 const TITLE_SEPARATOR_RE = /\s+[-–|—·]\s+/;
+const CHAPTER_SPLIT_RE = /\s*[-–—|·:]\s*((?:chapter|ch\.?|ep|episode)\s*\d+.*)$/i;
 
 export function extractTitles(
   $: CheerioAPI,
@@ -18,19 +23,43 @@ export function extractTitles(
     .map((s) => s.trim())
     .filter(Boolean);
 
-  const chapterLabel = findChapterLabel($, currentUrl, docParts);
+  const chapterLabel = findChapterLabel($, currentUrl, docParts, h1);
+
+  const ogBook =
+    collapseWs($('meta[property="og:novel:novel_name"]').attr("content") || "") ||
+    collapseWs($('meta[property="og:site_name"]').attr("content") || "");
 
   // Book title preference:
-  // 1) <h1> if present and not itself a chapter label
-  // 2) first <title> part that isn't a chapter label and isn't the last
-  //    segment (commonly the site name)
-  // 3) fall back to <h1> or first title part
+  // 1) <h1> with any embedded chapter clause stripped
+  // 2) non-chapter <title> parts (skip trailing site-name segment)
+  // 3) og:novel:novel_name / og:site_name when headings look chapter-ish
+  // 4) fall back to cleaned h1 / first title part
   let bookTitle: string | undefined;
   if (h1 && !CHAPTER_LABEL_RE.test(h1)) {
-    bookTitle = h1;
-  } else if (docParts.length > 0) {
-    const trimmed = docParts.slice(0, -1).filter((p) => !CHAPTER_LABEL_RE.test(p));
-    bookTitle = trimmed[0] ?? docParts.find((p) => !CHAPTER_LABEL_RE.test(p));
+    const cleaned = cleanBookTitle(h1);
+    if (cleaned && !isPlaceholderTitle(cleaned) && !CHAPTER_LABEL_RE.test(cleaned)) {
+      bookTitle = cleaned;
+    }
+  }
+  if (!bookTitle && docParts.length > 0) {
+    const trimmed = docParts
+      .slice(0, -1)
+      .map((p) => cleanBookTitle(p))
+      .filter((p) => p && !CHAPTER_ANYWHERE_RE.test(p) && !isPlaceholderTitle(p));
+    bookTitle =
+      trimmed[0] ??
+      docParts
+        .map((p) => cleanBookTitle(p))
+        .find((p) => p && !CHAPTER_ANYWHERE_RE.test(p) && !isPlaceholderTitle(p));
+  }
+  if (!bookTitle && ogBook && !CHAPTER_ANYWHERE_RE.test(ogBook) && !isPlaceholderTitle(ogBook)) {
+    bookTitle = cleanBookTitle(ogBook);
+  }
+  if (!bookTitle) {
+    const fallback = cleanBookTitle(h1 || docParts[0] || "");
+    if (fallback && !CHAPTER_LABEL_RE.test(fallback) && !isPlaceholderTitle(fallback)) {
+      bookTitle = fallback;
+    }
   }
 
   const title = bookTitle || h1 || docParts[0] || "Untitled chapter";
@@ -42,20 +71,34 @@ export function extractTitles(
   };
 }
 
+function extractChapterClause(text: string): string | null {
+  if (!CHAPTER_ANYWHERE_RE.test(text)) return null;
+  if (CHAPTER_LABEL_RE.test(text)) return text;
+  const split = text.match(CHAPTER_SPLIT_RE);
+  if (split) return collapseWs(split[1]);
+  const m = text.match(/((?:chapter|ch\.?|ep|episode)\s*\d+.*)$/i);
+  return m ? collapseWs(m[1]) : null;
+}
+
 function findChapterLabel(
   $: CheerioAPI,
   currentUrl: string,
   docParts: string[],
+  h1: string,
 ): string | null {
-  // 1) Headings + common chapter-title classes. Pick the longest match so a
+  // 1) Headings + common chapter-title classes. Prefer the longest match so a
   //    rich label ("Chapter 1125 - This Place, This Is Hell.") wins over a
-  //    bare "Chapter 1125".
+  //    bare "Chapter 1125". Also split book+chapter compound headings.
   let best: string | null = null;
+  const consider = (raw: string) => {
+    const clause = extractChapterClause(raw);
+    if (!clause || clause.length > 200) return;
+    if (!best || clause.length > best.length) best = clause;
+  };
+  if (h1) consider(h1);
   $("h1, h2, h3, h4, .chapter-title, .entry-title, [class*='chapter-title']").each(
     (_, el) => {
-      const t = collapseWs($(el).text());
-      if (!t || t.length > 200) return;
-      if (CHAPTER_LABEL_RE.test(t) && (!best || t.length > best.length)) best = t;
+      consider(collapseWs($(el).text()));
     },
   );
   if (best) return best;
@@ -74,7 +117,8 @@ function findChapterLabel(
         if (u.host !== cur.host) return;
         if (u.pathname.replace(/\/$/, "") !== cur.pathname.replace(/\/$/, "")) return;
         const t = collapseWs($(el).text());
-        if (CHAPTER_LABEL_RE.test(t)) matched = t;
+        const clause = extractChapterClause(t);
+        if (clause) matched = clause;
       } catch {
         /* ignore */
       }
@@ -86,7 +130,8 @@ function findChapterLabel(
 
   // 3) Fall back to any "Chapter N" piece inside the <title> tag.
   for (const part of docParts) {
-    if (CHAPTER_LABEL_RE.test(part)) return part;
+    const clause = extractChapterClause(part);
+    if (clause) return clause;
   }
   return null;
 }

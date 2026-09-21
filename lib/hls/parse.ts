@@ -60,14 +60,9 @@ async function fetchChapterHtml(url: URL, redirects = 0): Promise<string> {
   return res.text();
 }
 
-export async function loadChapter(
-  chapterUrl: string,
-  voice: string,
-): Promise<{ key: string; cached: CachedChapter }> {
-  const key = cacheKey(chapterUrl, voice);
-  const existing = getCached(key);
-  if (existing) return { key, cached: existing };
+export type ChapterTitles = Pick<Chapter, "title" | "bookTitle" | "chapterLabel" | "source" | "url">;
 
+async function parseChapter(chapterUrl: string): Promise<Chapter> {
   let target: URL;
   try {
     target = new URL(chapterUrl);
@@ -79,19 +74,42 @@ export async function loadChapter(
   }
   await publicUrl(target);
 
-  let chapter: Chapter;
   const customFetcher = pickCustomFetcher(target.toString());
   if (customFetcher) {
     try {
-      chapter = await customFetcher(target.toString());
+      return await customFetcher(target.toString());
     } catch (err) {
       throw new ChapterFetchError(`Fetch failed: ${(err as Error).message}`, 502);
     }
-  } else {
-    const html = await fetchChapterHtml(target);
-    const adapter = pickAdapter(target.toString());
-    chapter = adapter(html, target.toString());
   }
+  const html = await fetchChapterHtml(target);
+  const adapter = pickAdapter(target.toString());
+  return adapter(html, target.toString());
+}
+
+/** Lightweight title fetch — tolerates empty bodies (dead sites still yield titles). */
+export async function loadChapterTitles(chapterUrl: string): Promise<ChapterTitles> {
+  // Reuse a warm chapter cache entry when present (any voice).
+  // cacheKey includes voice, so we still parse when cold.
+  const chapter = await parseChapter(chapterUrl);
+  return {
+    url: chapter.url,
+    title: chapter.title,
+    bookTitle: chapter.bookTitle,
+    chapterLabel: chapter.chapterLabel,
+    source: chapter.source,
+  };
+}
+
+export async function loadChapter(
+  chapterUrl: string,
+  voice: string,
+): Promise<{ key: string; cached: CachedChapter }> {
+  const key = cacheKey(chapterUrl, voice);
+  const existing = getCached(key);
+  if (existing) return { key, cached: existing };
+
+  const chapter = await parseChapter(chapterUrl);
   if (chapter.paragraphs.length === 0) {
     throw new ChapterFetchError("Could not find chapter content on the page", 422);
   }

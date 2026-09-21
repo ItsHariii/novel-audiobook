@@ -16,6 +16,7 @@ import type { SleepMode } from "@/components/player/SleepTimerButton";
 import { Toast } from "@/components/player/Toast";
 import { LibraryAccount } from "@/components/player/LibraryAccount";
 import type { useLibrary } from "@/lib/library/useLibrary";
+import { useTitleRepair } from "@/lib/library/useTitleRepair";
 import { bookKey, type ChapterProgress } from "@/lib/library/types";
 import { writeLegacyPosition } from "@/lib/library/local";
 import { authorizedFetch } from "@/lib/supabase/browser";
@@ -156,6 +157,14 @@ function findChunkAtTime(cumDurations: number[], t: number): number {
 }
 
 export default function Player({ library }: { library: ReturnType<typeof useLibrary> }) {
+  const titleRepair = useTitleRepair({
+    enabled: library.enabled && !!library.user,
+    hydrated: library.hydrated,
+    entries: library.entries,
+    restore: library.restore,
+    capture: library.capture,
+    flush: library.flush,
+  });
   const playback = usePlaybackSession();
   const [inputUrl, setInputUrl] = useState("");
   const [current, setCurrent] = useState<LoadedChapter | null>(null);
@@ -1388,7 +1397,7 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
     void loadChapterFromUrl(url, false, saved?.voice);
   };
   const account = library.enabled ? <LibraryAccount email={library.user?.email} ready={library.ready}
-    status={library.status} conflict={library.conflict} onResolve={library.resolve}
+    status={titleRepair.status ?? library.status} conflict={library.conflict} onResolve={library.resolve}
     onSignOut={async () => {
       captureRef.current();
       await library.flush();
