@@ -19,6 +19,16 @@ export interface AudioAsset {
   bytes: number;
   audio_chunks: AudioChunk[];
 }
+// What polling needs about an asset: identity, readiness and timing, but none
+// of the chapter text, which is read once per chapter instead of on every poll.
+export interface AssetMeta {
+  id: string;
+  chunk_count: number;
+  url: string;
+  next_url: string | null;
+  audio_chunks: Array<{ chunk_index: number; duration: number; parts?: AudioPart[] }>;
+}
+export type MetaRow = { ordinal: number; asset: AssetMeta };
 export interface SessionChapter {
   ordinal: number;
   assetId: string;
@@ -36,6 +46,9 @@ export interface PlaybackSession {
   terminal: boolean;
   error: string | null;
 }
+// Status responses only carry chapters the client does not have yet: `chapters`
+// starts at ordinal `from`, and the client keeps its own copies before that.
+export type SessionStatus = PlaybackSession & { from: number };
 export interface SessionRow {
   id: string;
   user_id: string;
@@ -50,4 +63,12 @@ export interface SessionRow {
 export function chapterAtTime(chapters: SessionChapter[], time: number) {
   return chapters.find((c) => time >= c.start && time < c.start + c.duration)
     ?? (time >= (chapters.at(-1)?.start ?? Infinity) ? chapters.at(-1) : chapters[0]);
+}
+
+// A status response omits the chapters the request said it already had.
+// A response without `from` (an older server mid-deploy) is the full list.
+export function mergeStatus(existing: PlaybackSession, status: SessionStatus): PlaybackSession {
+  const { from = 0, ...rest } = status;
+  const chapters = from === 0 ? rest.chapters : [...existing.chapters.slice(0, from), ...rest.chapters];
+  return { ...rest, chapters, playlistUrl: existing.playlistUrl };
 }

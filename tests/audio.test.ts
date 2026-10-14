@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { packMp3, retimestamp, timestampTag } from "../lib/audio/mp3";
-import { eventPlaylist, readyChapters } from "../lib/audio/playlist";
+import { eventPlaylist, readyChapters, readyTimeline } from "../lib/audio/playlist";
 import { restoreApplies } from "../lib/audio/restore";
-import { chapterAtTime, LOOKAHEAD, type AudioAsset } from "../lib/audio/types";
+import { chapterAtTime, LOOKAHEAD, mergeStatus, type AudioAsset } from "../lib/audio/types";
 import { publicAddress } from "../lib/hls/public-url";
 
 const TIMESTAMP_OWNER = Buffer.from("com.apple.streaming.transportStreamTimestamp\0");
@@ -68,6 +68,28 @@ test("a session playlist only appends complete chapters with stable URLs and tim
   assert.equal(chapterAtTime(readyChapters(all), 55)?.chapter.title, "c");
   assert.equal(chapterAtTime(readyChapters(all), 24)?.chapter.title, "b");
   assert.equal(readyChapters(all)[2].start, 48);
+});
+
+// Polling reads only counts and durations; the text is fetched separately.
+test("the ready timeline needs no chapter text and matches the full chapters", () => {
+  const all = [{ ordinal: 0, asset: asset("a") }, { ordinal: 1, asset: asset("b") }, { ordinal: 2, asset: asset("c") }];
+  all[2].asset.audio_chunks.pop();
+  const meta = all.map(({ ordinal, asset: a }) => ({ ordinal, asset: { id: a.id, chunk_count: a.chunks.length, audio_chunks: a.audio_chunks } }));
+  const timeline = readyTimeline(meta);
+  assert.deepEqual(timeline.map((c) => [c.ordinal, c.start, c.duration]), readyChapters(all).map((c) => [c.ordinal, c.start, c.duration]));
+  assert.equal(timeline.length, 2);
+  assert.equal(eventPlaylist(timeline, all, "s", "t"), eventPlaylist(readyChapters(all), all, "s", "t"));
+});
+
+test("a status response only replaces the chapters after the ones the client kept", () => {
+  const rows = [{ ordinal: 0, asset: asset("a") }, { ordinal: 1, asset: asset("b") }];
+  const [a, b] = readyChapters(rows);
+  const existing = { id: "s", playlistUrl: "/kept", voice: "v", chapters: [a], preparing: true, terminal: false, error: null };
+  const merged = mergeStatus(existing, { ...existing, playlistUrl: "/new", chapters: [b], from: 1 });
+  assert.deepEqual(merged.chapters.map((c) => c.ordinal), [0, 1]);
+  assert.equal(merged.playlistUrl, "/kept");
+  assert.equal("from" in merged, false);
+  assert.deepEqual(mergeStatus(existing, { ...existing, chapters: [a, b], from: 0 }).chapters.map((c) => c.ordinal), [0, 1]);
 });
 
 // A playlist iOS considers open is reported as live: no duration for the lock
