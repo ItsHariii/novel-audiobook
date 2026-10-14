@@ -1,8 +1,9 @@
 import "server-only";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { adminSupabase, check, HttpError } from "@/lib/supabase/server";
-import { LOOKAHEAD, type AudioAsset, type PlaybackSession, type SessionRow } from "./types";
-import { readyChapters } from "./playlist";
+import { LOOKAHEAD, type AssetMeta, type MetaRow, type SessionChapter, type SessionRow, type SessionStatus } from "./types";
+import { readyTimeline, withText } from "./playlist";
+import type { Chapter } from "@/lib/types";
 
 export const BUCKET = "chapter-audio";
 export const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -33,34 +34,53 @@ export async function getSession(id: string, access: { userId: string } | { toke
   return s;
 }
 
-export async function sessionAssets(id: string): Promise<Array<{ ordinal: number; asset: AudioAsset }>> {
+// Polled every few seconds per open player, so it must stay small: chapter
+// text lives in the same rows and is read separately, once per chapter.
+export async function sessionMeta(id: string, { parts = false } = {}): Promise<MetaRow[]> {
+  const chunks = parts ? "chunk_index, duration, parts" : "chunk_index, duration";
   const rows = check(await adminSupabase().from("session_chapters")
-    .select("ordinal, audio_assets(*, audio_chunks(*))").eq("session_id", id).order("ordinal"));
-  return (rows ?? []).map((row) => ({ ordinal: row.ordinal, asset: row.audio_assets as unknown as AudioAsset }));
+    .select(`ordinal, audio_assets(id, chunk_count, url:chapter->>url, next_url:chapter->>nextUrl, audio_chunks(${chunks}))`)
+    .eq("session_id", id).order("ordinal"));
+  return (rows ?? []).map((row) => ({ ordinal: row.ordinal, asset: row.audio_assets as unknown as AssetMeta }));
 }
 
-export async function extendSession(session: SessionRow) {
+export async function extendSession(session: SessionRow, rows?: MetaRow[]) {
   if (session.terminal) return;
-  const rows = await sessionAssets(session.id);
+  rows ??= await sessionMeta(session.id);
   const last = rows.at(-1);
   if (!last) return;
-  const nextUrl = last.asset.chapter.nextUrl;
-  if (!nextUrl || rows.some((r) => r.asset.chapter.url === nextUrl)) {
+  const nextUrl = last.asset.next_url;
+  if (!nextUrl || rows.some((r) => r.asset.url === nextUrl)) {
     check(await adminSupabase().from("playback_sessions").update({ terminal: true }).eq("id", session.id));
   } else if (last.ordinal < session.requested_ordinal + LOOKAHEAD) {
     await enqueue(`prepare:${session.id}:${last.ordinal + 1}`, session.id, "prepare", { url: nextUrl, ordinal: last.ordinal + 1 });
   }
 }
 
-export async function sessionStatus(session: SessionRow, token = ""): Promise<PlaybackSession> {
-  const rows = await sessionAssets(session.id);
-  const chapters = readyChapters(rows);
-  const failed = await failedSessionJobs(session.id, rows.map((r) => r.asset.id));
+// `have` is how many leading chapters the client already holds. Ready chapters
+// never change (assets are content-addressed), so only later ones are sent.
+export async function sessionStatus(session: SessionRow, { token = "", have = 0, rows }: { token?: string; have?: number; rows?: MetaRow[] } = {}): Promise<SessionStatus> {
+  rows ??= await sessionMeta(session.id);
+  const ready = readyTimeline(rows);
+  const from = have <= ready.length ? have : 0;
+  const [chapters, failed] = await Promise.all([
+    chapterTexts(session.id, ready.slice(from)),
+    failedSessionJobs(session.id, rows.map((r) => r.asset.id)),
+  ]);
   return { id: session.id, voice: session.voice,
     playlistUrl: `/api/playback-sessions/${session.id}/manifest?token=${encodeURIComponent(token)}`,
-    chapters, preparing: !session.terminal || chapters.length < rows.length,
-    terminal: session.terminal && chapters.length === rows.length,
+    chapters, from, preparing: !session.terminal || ready.length < rows.length,
+    terminal: session.terminal && ready.length === rows.length,
     error: failed?.[0]?.error ? "Audio preparation failed. Use Retry audio to try again." : session.error };
+}
+
+async function chapterTexts(sessionId: string, ready: ReturnType<typeof readyTimeline>): Promise<SessionChapter[]> {
+  if (!ready.length) return [];
+  const rows = check(await adminSupabase().from("session_chapters")
+    .select("ordinal, audio_assets(chapter, chunks)").eq("session_id", sessionId)
+    .gte("ordinal", ready[0].ordinal).lte("ordinal", ready.at(-1)!.ordinal)) ?? [];
+  const text = new Map(rows.map((row) => [row.ordinal, row.audio_assets as unknown as { chapter: Chapter; chunks: string[] }]));
+  return ready.map((r) => withText(r, text.get(r.ordinal)!.chapter, text.get(r.ordinal)!.chunks));
 }
 
 export async function failedSessionJobs(sessionId: string, assetIds: string[]) {

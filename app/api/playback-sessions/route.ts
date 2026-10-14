@@ -16,6 +16,6 @@ export async function POST(req: Request) {
     if (!parsed.success) throw new HttpError(400, "Enter a valid chapter URL.");
     const { session, token } = await newSession(user.id, parsed.data.url, normalizeVoice(parsed.data.voice));
     after(async () => { try { await runAudioWorker(); } catch (e) { console.error("[tome] worker kickoff failed", e); } });
-    return Response.json(await sessionStatus(session, token), { status: 201, headers: { "Cache-Control": "private, no-store" } });
+    return Response.json(await sessionStatus(session, { token }), { status: 201, headers: { "Cache-Control": "private, no-store" } });
   } catch (error) { return apiError(error); }
 }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 
 test("database migration enforces ownership, revisions, imports and job leases", async () => {
@@ -16,7 +16,10 @@ test("database migration enforces ownership, revisions, imports and job leases",
       create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
       insert into auth.users values ('11111111-1111-1111-1111-111111111111'), ('22222222-2222-2222-2222-222222222222');
     `);
-    await db.exec(await readFile(new URL("../supabase/migrations/202609190001_library_audio.sql", import.meta.url), "utf8"));
+    const migrations = new URL("../supabase/migrations/", import.meta.url);
+    for (const file of (await readdir(migrations)).filter((f) => f.endsWith(".sql")).sort()) {
+      await db.exec(await readFile(new URL(file, migrations), "utf8"));
+    }
     await db.exec("set role authenticated; set request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111'");
     const p = { chapterUrl: "https://example.com/book/1", bookKey: "book", title: "Book", source: "example.com", mode: "audio", voice: "Ava", audioTime: 12, readerChunk: 0, readerOffset: 0, wordIndex: 0 };
     const save = async (expected: number, importing = false) => (await db.query<{ result: { accepted: boolean; record: { revision: number } } }>("select public.save_progress($1::jsonb,$2,$3) as result", [JSON.stringify(p), expected, importing])).rows[0].result;
@@ -105,5 +108,8 @@ test("database migration enforces ownership, revisions, imports and job leases",
     await db.exec("delete from public.playback_sessions where expires_at <= now(); select public.retire_audio_asset(id,generation) from public.audio_assets");
     assert.equal((await db.query("select * from public.audio_assets")).rows.length, 0);
     assert.equal((await db.query("select * from public.chapter_progress")).rows.length, 1, "Audio cleanup preserves stopping points");
+    // Polling reads readiness from chunk_count instead of the chapter text.
+    await db.exec(`insert into public.audio_assets(id,user_id,chapter,voice,chunks) values ('counted','11111111-1111-1111-1111-111111111111','{}','voice','["a","b","c"]')`);
+    assert.equal((await db.query<{ chunk_count: number }>("select chunk_count from public.audio_assets where id='counted'")).rows[0].chunk_count, 3);
   } finally { await db.close(); }
 });

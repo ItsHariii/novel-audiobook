@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { authorizedFetch } from "@/lib/supabase/browser";
 import type { LoadedChapter } from "@/components/player/types";
-import { chapterAtTime, type PlaybackSession, type SessionChapter } from "./types";
+import { chapterAtTime, mergeStatus, type PlaybackSession, type SessionChapter, type SessionStatus } from "./types";
 
 export function loadedSessionChapter(session: PlaybackSession, chapter: SessionChapter): LoadedChapter {
   const cumDurations = [0];
@@ -21,11 +21,11 @@ export function usePlaybackSession() {
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const existing = sessionRef.current;
     if (!existing) return null;
-    const res = await authorizedFetch(`/api/playback-sessions/${existing.id}`, { signal });
+    const res = await authorizedFetch(`/api/playback-sessions/${existing.id}?have=${existing.chapters.length}`, { signal });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Could not refresh audio");
     if (existing.id !== sessionRef.current?.id) return null;
-    const updated = { ...data, playlistUrl: existing.playlistUrl } as PlaybackSession;
+    const updated = mergeStatus(existing, data as SessionStatus);
     sessionRef.current = updated;
     setSession(updated);
     setError(updated.error);
@@ -77,16 +77,17 @@ export function usePlaybackSession() {
   // a phone that wakes for a moment still needs to notice newly prepared
   // chapters: gating this on `visible` meant a locked device could never pick
   // them up, so playback that ran off the end of the attached playlist stayed
-  // dead until the screen came back on.
+  // dead until the screen came back on. A terminal session has every chapter
+  // it will ever have, so there is nothing left to poll for.
   useEffect(() => {
-    if (!session?.id || preparing) return;
+    if (!session?.id || preparing || session.terminal) return;
     const sync = () => { void refresh().catch((e) => setError(e.message)); };
     const interval = setInterval(sync, 5000);
     const onVisible = () => { if (document.visibilityState === "visible") sync(); };
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("online", sync);
     return () => { clearInterval(interval); document.removeEventListener("visibilitychange", onVisible); window.removeEventListener("online", sync); };
-  }, [session?.id, preparing, refresh]);
+  }, [session?.id, session?.terminal, preparing, refresh]);
 
   const atTime = useCallback((time: number) => {
     const current = sessionRef.current;
