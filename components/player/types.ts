@@ -37,4 +37,8 @@ export interface HistoryItem {
   bookTitle?: string;
   chapterLabel?: string;
   coverUrl?: string;
+  kind?: "comic";
+  /** Comics: page reached (0-based) out of pageCount. */
+  page?: number;
+  pageCount?: number;
 }

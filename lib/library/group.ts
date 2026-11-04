@@ -19,6 +19,8 @@ export interface BookGroup {
   latest: HistoryItem;
   coverSeed: string;
   coverUrl?: string;
+  /** A comic series; never merged with a novel of the same name. */
+  kind?: "comic";
 }
 
 /** History entries grouped into books, most recently touched first. */
@@ -27,7 +29,7 @@ export function groupHistoryByBook(history: HistoryItem[]): BookGroup[] {
   for (const item of history) {
     const display = displayBookTitle(item);
     const norm = normalizeBookTitle(display);
-    const key = norm || deriveBookKey(item);
+    const key = `${item.kind === "comic" ? "comic:" : ""}${norm || deriveBookKey(item)}`;
     const existing = byKey.get(key);
     const chNum = chapterNumber(item);
     if (existing) {
@@ -55,6 +57,7 @@ export function groupHistoryByBook(history: HistoryItem[]): BookGroup[] {
         latest: item,
         coverSeed: display,
         coverUrl: item.coverUrl,
+        ...(item.kind === "comic" ? { kind: "comic" as const } : {}),
       });
     }
   }
@@ -141,6 +144,7 @@ function mergeVariants(groups: BookGroup[]): BookGroup[] {
   });
   for (let i = 0; i < groups.length; i++) {
     for (let j = i + 1; j < groups.length; j++) {
+      if (groups[i].kind !== groups[j].kind) continue;
       const sharedId = [...ids[i]].some((id) => ids[j].has(id));
       const sharedName = [...names[i]].some((a) => [...names[j]].some((b) => sameBook(a, b)));
       if (sharedId || sharedName) parent[find(j)] = find(i);

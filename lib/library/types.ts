@@ -17,6 +17,9 @@ export interface ChapterProgress {
   // Retained for the stored payload shape; the speed reader that used it is gone.
   wordIndex: number;
   coverUrl?: string;
+  /** Absent on novels. Comics keep their place as readerChunk = page, readerOffset = fraction of that page. */
+  kind?: "comic";
+  pageCount?: number;
 }
 
 export interface ProgressRecord {

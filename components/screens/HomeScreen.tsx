@@ -56,16 +56,22 @@ export function HomeScreen(props: {
             <div className="flex min-w-0 flex-1 flex-col justify-between">
               <div>
                 <span className="inline-flex h-6 items-center gap-2 rounded-full bg-[var(--color-accent-soft)] px-2.5 text-[10.5px] font-semibold tracking-[0.04em] text-[var(--color-accent-text)]">
-                  {heroPlaying ? <><EqBars />NOW PLAYING</> : `CONTINUE ${heroItem.mode === "reader" ? "READING" : "LISTENING"}`}
+                  {heroPlaying ? <><EqBars />NOW PLAYING</> : `CONTINUE ${hero.kind === "comic" ? "READING" : heroItem.mode === "reader" ? "READING" : "LISTENING"}`}
                 </span>
                 <p className="mt-2.5 truncate font-serif text-[17px] font-medium leading-snug">{hero.title}</p>
                 <p className="mt-0.5 truncate text-[13px] text-[var(--color-muted)]">{chapterLine(heroItem.chapterLabel || heroItem.title)}</p>
               </div>
-              <HeroProgress nowPlaying={heroIsCurrent ? props.nowPlaying : null} audioTime={heroItem.audioTime} />
+              {hero.kind === "comic" ? (
+                heroItem.pageCount ? <p className="tabular mt-3 text-[11px] font-medium text-[var(--color-dim)]">Page {Math.min((heroItem.page ?? 0) + 1, heroItem.pageCount)} of {heroItem.pageCount}</p> : null
+              ) : <HeroProgress nowPlaying={heroIsCurrent ? props.nowPlaying : null} audioTime={heroItem.audioTime} />}
             </div>
           </div>
           <div className="mt-4 flex gap-2.5">
-            {heroPlaying ? (
+            {hero.kind === "comic" ? (
+              <Button className="flex-1" onClick={() => props.onRead(heroItem.url)} aria-label={`Read · ${heroItem.chapterLabel || heroItem.title}`}>
+                <BookIcon size={17} />Read
+              </Button>
+            ) : heroPlaying ? (
               <Button className="flex-1" onClick={props.onPause}>
                 <PauseIcon size={17} />Pause
               </Button>
@@ -74,9 +80,11 @@ export function HomeScreen(props: {
                 <PlayIcon size={17} />{heroIsCurrent ? "Play" : "Resume"}
               </Button>
             )}
-            <Button variant="secondary" className="flex-1" onClick={() => props.onRead(heroItem.url)} aria-label={`Read · ${heroItem.chapterLabel || heroItem.title}`}>
-              <BookIcon size={17} />Read
-            </Button>
+            {hero.kind !== "comic" && (
+              <Button variant="secondary" className="flex-1" onClick={() => props.onRead(heroItem.url)} aria-label={`Read · ${heroItem.chapterLabel || heroItem.title}`}>
+                <BookIcon size={17} />Read
+              </Button>
+            )}
           </div>
         </section>
       )}
