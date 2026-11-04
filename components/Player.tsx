@@ -1476,7 +1476,7 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
 
       <main className="lg:pl-[88px]">
         <div key={tab} inert={!!surface} aria-hidden={surface ? true : undefined}
-          className="animate-tome-fade pt-safe mx-auto w-full max-w-[720px] px-5 pb-[172px] pt-6 lg:px-10 lg:pb-32 lg:pt-12">
+          className="animate-tome-fade mx-auto w-full max-w-[720px] px-5 pb-[172px] pt-[calc(env(safe-area-inset-top,0px)+1.5rem)] lg:px-10 lg:pb-32 lg:pt-[calc(env(safe-area-inset-top,0px)+3rem)]">
           {tab === "home" && (
             <HomeScreen
               books={books}

@@ -215,7 +215,7 @@ export function ComicReaderScreen(props: {
         className="relative h-full overflow-y-auto overscroll-contain outline-none [overflow-anchor:none]">
         {chapter ? (
           <>
-            <div className="pt-safe h-14" aria-hidden />
+            {/* Pages start at the very top and scroll under the status bar and Dynamic Island. */}
             {chapter.pages.map((p, i) => {
               const ratio = p.width && p.height ? `${p.width} / ${p.height}` : undefined;
               const retries = failed[i] ?? 0;
@@ -244,7 +244,7 @@ export function ComicReaderScreen(props: {
                 </div>
               );
             })}
-            <div className="pb-safe mx-auto flex max-w-[800px] flex-col items-center gap-3 px-6 pb-36 pt-14 text-center">
+            <div className="mx-auto flex max-w-[800px] flex-col items-center gap-3 px-6 pb-[calc(env(safe-area-inset-bottom,0px)+9rem)] pt-14 text-center">
               <p className="text-[13px] text-[var(--color-dim)]">End of {chapter.chapterLabel}</p>
               {chapter.nextUrl ? (
                 <Button className="w-full max-w-xs" onClick={(e) => { e.stopPropagation(); go(chapter.nextUrl); }}>
@@ -269,7 +269,7 @@ export function ComicReaderScreen(props: {
             </div>
           </div>
         ) : (
-          <div className="pt-safe mx-auto max-w-3xl px-5 pt-16"><LoadingSkeleton /></div>
+          <div className="mx-auto max-w-3xl px-5 pt-[calc(env(safe-area-inset-top,0px)+4rem)]"><LoadingSkeleton /></div>
         )}
       </div>
 
