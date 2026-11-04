@@ -1288,8 +1288,10 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
   }, [surface, openSurface]);
 
   const comicUrls = useMemo(() => new Set(libraryHistory.filter((h) => h.kind === "comic").map((h) => h.url)), [libraryHistory]);
+  // Reading a comic and hearing a novel at once is never what anyone wants.
   const openComic = (url: string) => {
     openSurface(null);
+    pause();
     setComicUrl(url);
   };
   const visitComic = useCallback((item: HistoryItem) => {

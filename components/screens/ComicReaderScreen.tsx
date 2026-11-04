@@ -210,7 +210,7 @@ export function ComicReaderScreen(props: {
   const label = chapter?.chapterLabel ?? "";
 
   return (
-    <section aria-label="Comic reader" data-comic-reader className="fixed inset-0 z-50 bg-black text-white">
+    <section aria-label="Comic reader" data-comic-reader className="fixed inset-0 z-50 bg-[var(--color-bg)] text-[var(--color-text)]">
       <div ref={scrollRef} tabIndex={-1} onScroll={onScroll} onClick={() => setChromeHidden((h) => !h)}
         className="relative h-full overflow-y-auto overscroll-contain outline-none [overflow-anchor:none]">
         {chapter ? (
@@ -223,9 +223,9 @@ export function ComicReaderScreen(props: {
                 <div key={`${chapter.url}#${i}`} ref={(el) => { pageRefs.current[i] = el; }}
                   className="relative mx-auto w-full max-w-[800px]" style={ratio ? { aspectRatio: ratio } : { minHeight: "60vh" }}>
                   {retries > 0 && retries % 2 === 1 ? (
-                    <div className="absolute inset-0 grid place-items-center bg-neutral-900">
+                    <div className="absolute inset-0 grid place-items-center bg-[var(--color-panel-2)]">
                       <button type="button" onClick={(e) => { e.stopPropagation(); setFailed((f) => ({ ...f, [i]: retries + 1 })); }}
-                        className="flex h-11 items-center gap-2 rounded-full bg-white/10 px-4 text-sm font-semibold hover:bg-white/20">
+                        className="flex h-11 items-center gap-2 rounded-full bg-[var(--color-panel)] px-4 text-sm font-semibold hover:bg-[var(--color-hover)]">
                         <RetryIcon size={16} />Page {i + 1} didn&apos;t load · Retry
                       </button>
                     </div>
@@ -244,8 +244,8 @@ export function ComicReaderScreen(props: {
                 </div>
               );
             })}
-            <div className="pb-safe mx-auto flex max-w-[800px] flex-col items-center gap-3 px-6 py-14 text-center">
-              <p className="text-[13px] text-white/60">End of {chapter.chapterLabel}</p>
+            <div className="pb-safe mx-auto flex max-w-[800px] flex-col items-center gap-3 px-6 pb-36 pt-14 text-center">
+              <p className="text-[13px] text-[var(--color-dim)]">End of {chapter.chapterLabel}</p>
               {chapter.nextUrl ? (
                 <Button className="w-full max-w-xs" onClick={(e) => { e.stopPropagation(); go(chapter.nextUrl); }}>
                   <NextChapterIcon size={17} />Next chapter
@@ -254,64 +254,72 @@ export function ComicReaderScreen(props: {
                 <p className="text-sm font-medium">You&apos;re caught up.</p>
               )}
               <button type="button" onClick={(e) => { e.stopPropagation(); props.onClose(); }}
-                className="h-11 rounded-full px-4 text-sm font-medium text-white/70 hover:bg-white/10">Back to library</button>
+                className="h-11 rounded-full px-4 text-sm font-medium text-[var(--color-muted)] hover:bg-[var(--color-hover)]">Back to library</button>
             </div>
           </>
         ) : error && !loading ? (
           <div className="pt-safe mx-auto flex h-full max-w-md flex-col items-center justify-center gap-4 px-6 text-center" onClick={(e) => e.stopPropagation()}>
             <AlertIcon size={28} className="text-[var(--color-failed)]" />
             <p className="text-[15px] font-semibold">Couldn&apos;t open this chapter</p>
-            <p className="text-[13px] leading-relaxed text-white/70">{error}</p>
+            <p className="text-[13px] leading-relaxed text-[var(--color-muted)]">{error}</p>
             <div className="flex gap-2">
               <Button onClick={retry}><RetryIcon size={16} />Retry</Button>
               <a href={props.url} target="_blank" rel="noreferrer noopener"
-                className="inline-flex h-11 items-center rounded-xl px-4 text-sm font-semibold text-white/80 hover:bg-white/10">Open on site</a>
+                className="inline-flex h-11 items-center rounded-xl px-4 text-sm font-semibold text-[var(--color-accent-text)] hover:bg-[var(--color-hover)]">Open on site</a>
             </div>
           </div>
         ) : (
-          <div className="pt-safe px-5 pt-16 opacity-60"><LoadingSkeleton /></div>
+          <div className="pt-safe mx-auto max-w-3xl px-5 pt-16"><LoadingSkeleton /></div>
         )}
       </div>
 
-      {/* Hairline progress while the chrome is away. */}
+      {/* Hairline progress shows while chrome is away. */}
       <div aria-hidden className={`pointer-events-none absolute inset-x-0 bottom-[env(safe-area-inset-bottom,0px)] h-[2px] transition-opacity ${chromeHidden ? "opacity-100" : "opacity-0"}`}>
         <div className="h-full bg-[var(--color-accent)]" style={{ width: `${progress * 100}%` }} />
       </div>
 
-      <div className={`pt-safe absolute inset-x-0 top-0 z-10 bg-black/80 backdrop-blur-xl transition duration-200 ${chromeHidden ? "pointer-events-none -translate-y-full opacity-0" : ""}`}
-        aria-hidden={chromeHidden || undefined}>
-        <div className="mx-auto flex h-14 max-w-3xl items-center gap-1 px-2 text-white">
-          <IconButton label="Back" onClick={props.onClose} className="!text-white hover:!bg-white/10"><ChevronLeftIcon size={22} /></IconButton>
+      <div className={`pt-safe absolute inset-x-0 top-0 z-10 border-b border-[var(--color-border)] bg-[var(--color-nav)] backdrop-blur-xl transition duration-200 ${
+        chromeHidden ? "pointer-events-none -translate-y-full opacity-0" : ""
+      }`} aria-hidden={chromeHidden || undefined}>
+        <div className="mx-auto flex h-14 max-w-3xl items-center gap-1 px-2">
+          <IconButton label="Back" onClick={props.onClose}><ChevronLeftIcon size={22} /></IconButton>
           <div className="min-w-0 flex-1 text-center">
             <p className="truncate text-[13.5px] font-semibold leading-tight">{label || title}</p>
-            <p className="truncate text-[11.5px] leading-tight text-white/60">{label ? title : chapter?.source}</p>
+            <p className="truncate text-[11.5px] leading-tight text-[var(--color-dim)]">{label ? title : chapter?.source}</p>
           </div>
-          {canFullscreen && (
-            <IconButton label={fullscreen ? "Exit full screen" : "Full screen"} onClick={toggleFullscreen} className="!text-white hover:!bg-white/10">
-              {fullscreen ? <ShrinkIcon size={19} /> : <ExpandIcon size={19} />}
-            </IconButton>
-          )}
-          <IconButton label="Chapters" onClick={() => setListOpen(true)} disabled={!chapter?.chapters?.length} className="!text-white hover:!bg-white/10"><ListIcon size={20} /></IconButton>
+          <IconButton label="Chapters" onClick={() => setListOpen(true)} disabled={!chapter?.chapters?.length}><ListIcon size={20} /></IconButton>
         </div>
       </div>
 
-      <div className={`pb-safe absolute inset-x-0 bottom-0 z-10 bg-black/80 backdrop-blur-xl transition duration-200 ${chromeHidden ? "pointer-events-none translate-y-full opacity-0" : ""}`}
-        aria-hidden={chromeHidden || undefined}>
-        <div className="mx-auto flex max-w-3xl items-center gap-2 px-2 py-2.5 text-white">
-          <IconButton label="Previous chapter" onClick={() => go(chapter?.prevUrl)} disabled={!chapter?.prevUrl} className="!text-white hover:!bg-white/10"><PrevChapterIcon size={20} /></IconButton>
-          <div className="tabular flex min-w-0 flex-1 items-center gap-3 text-[11px] font-medium text-white/70">
-            <span className="w-16 shrink-0">{chapter ? `Page ${Math.min(pos.page + 1, chapter.pages.length)}/${chapter.pages.length}` : ""}</span>
-            <div className="h-1 flex-1 overflow-hidden rounded-full bg-white/15">
+      <div className={`pb-safe absolute inset-x-0 bottom-0 z-10 border-t border-[var(--color-border)] bg-[var(--color-nav)] backdrop-blur-xl transition duration-200 ${
+        chromeHidden ? "pointer-events-none translate-y-full opacity-0" : ""
+      }`} aria-hidden={chromeHidden || undefined}>
+        <div className="mx-auto max-w-3xl px-4 pt-3">
+          <div className="tabular flex items-center gap-3 text-[11px] font-medium text-[var(--color-dim)]">
+            <span className="w-9">{Math.round(progress * 100)}%</span>
+            <div className="h-1 flex-1 overflow-hidden rounded-full bg-[var(--color-border)]">
               <div className="h-full rounded-full bg-[var(--color-accent)]" style={{ width: `${progress * 100}%` }} />
             </div>
-            <span className="w-9 shrink-0 text-right">{Math.round(progress * 100)}%</span>
+            <span className="w-16 text-right">{chapter ? `Page ${Math.min(pos.page + 1, chapter.pages.length)}/${chapter.pages.length}` : ""}</span>
           </div>
-          <IconButton label="Next chapter" onClick={() => go(chapter?.nextUrl)} disabled={!chapter?.nextUrl} className="!text-white hover:!bg-white/10"><NextChapterIcon size={20} /></IconButton>
+          <div className="flex items-center justify-between gap-2 py-2.5">
+            <IconButton label="Previous chapter" onClick={() => go(chapter?.prevUrl)} disabled={!chapter?.prevUrl}><PrevChapterIcon size={20} /></IconButton>
+            <button type="button" onClick={() => setListOpen(true)} disabled={!chapter?.chapters?.length}
+              className="flex h-12 min-w-0 flex-1 items-center justify-center gap-2 rounded-[14px] bg-[var(--color-accent)] px-4 text-[14.5px] font-semibold text-[var(--color-on-accent)] transition hover:bg-[var(--color-accent-hover)] disabled:bg-[var(--color-panel-2)] disabled:text-[var(--color-dim)]">
+              <ListIcon size={18} />
+              <span className="truncate">{chapter?.chapterNumber !== undefined ? `Chapter ${chapter.chapterNumber}` : "Chapters"}</span>
+            </button>
+            {canFullscreen ? (
+              <IconButton label={fullscreen ? "Exit full screen" : "Full screen"} onClick={toggleFullscreen}>
+                {fullscreen ? <ShrinkIcon size={19} /> : <ExpandIcon size={19} />}
+              </IconButton>
+            ) : null}
+            <IconButton label="Next chapter" onClick={() => go(chapter?.nextUrl)} disabled={!chapter?.nextUrl}><NextChapterIcon size={20} /></IconButton>
+          </div>
         </div>
       </div>
 
       <Sheet open={listOpen} onClose={() => setListOpen(false)} label="Chapters">
-        <div className="text-[var(--color-text)]">
         <p className="eyebrow mb-3">{title}</p>
         <ol className="-mx-2 max-h-[60vh] overflow-y-auto overscroll-contain">
           {chapter?.chapters?.map((c) => {
@@ -326,7 +334,6 @@ export function ComicReaderScreen(props: {
             );
           })}
         </ol>
-        </div>
       </Sheet>
     </section>
   );
