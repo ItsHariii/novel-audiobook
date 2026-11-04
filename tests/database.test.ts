@@ -113,3 +113,42 @@ test("database migration enforces ownership, revisions, imports and job leases",
     assert.equal((await db.query<{ chunk_count: number }>("select chunk_count from public.audio_assets where id='counted'")).rows[0].chunk_count, 3);
   } finally { await db.close(); }
 });
+
+test("comic progress saves through the existing progress function", async () => {
+  const db = new PGlite();
+  try {
+    await db.exec(`
+      create role anon; create role authenticated; create role service_role bypassrls;
+      create schema auth; create schema storage;
+      create table auth.users (id uuid primary key);
+      create function auth.uid() returns uuid language sql stable as
+        $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
+      grant usage on schema auth to authenticated, anon, service_role;
+      create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
+      insert into auth.users values ('11111111-1111-1111-1111-111111111111');
+    `);
+    const migrations = new URL("../supabase/migrations/", import.meta.url);
+    for (const file of (await readdir(migrations)).filter((f) => f.endsWith(".sql")).sort()) {
+      await db.exec(await readFile(new URL(file, migrations), "utf8"));
+    }
+    await db.exec("set role authenticated; set request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111'");
+    const series = "https://asurascans.com/comics/dungeon-odyssey-ab39de10";
+    const comic = (n: number, page: number, offset: number) => ({
+      chapterUrl: `${series}/chapter/${n}`, bookKey: series, title: "Dungeon Odyssey", bookTitle: "Dungeon Odyssey",
+      chapterLabel: `Chapter ${n}`, source: "asurascans.com", mode: "reader", audioTime: 0, voice: "",
+      readerChunk: page, readerOffset: offset, wordIndex: 0, kind: "comic", pageCount: 11,
+      coverUrl: "https://cdn.asurascans.com/asura-images/covers/dungeon-odyssey.f39586.webp",
+    });
+    const save = async (p: object, expected: number) => (await db.query<{ result: { accepted: boolean; record: { revision: number; payload: { readerOffset: number; kind: string } } } }>(
+      "select public.save_progress($1::jsonb,$2,false) as result", [JSON.stringify(p), expected])).rows[0].result;
+    const first = await save(comic(119, 4, 0.3127), 0);
+    assert.equal(first.accepted, true);
+    assert.equal(first.record.payload.kind, "comic");
+    assert.equal(first.record.payload.readerOffset, 0.3127);
+    assert.equal((await save(comic(120, 0, 0), 0)).accepted, true);
+    const books = (await db.query<{ book_key: string; latest_url: string }>("select book_key, latest_url from public.books")).rows;
+    assert.deepEqual(books, [{ book_key: series, latest_url: `${series}/chapter/120` }]);
+  } finally {
+    await db.close();
+  }
+});

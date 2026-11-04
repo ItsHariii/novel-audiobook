@@ -16,6 +16,7 @@ Designed for mobile: background playback with the screen locked, lock-screen med
 - Jump to any paragraph in the chapter by tapping it
 - Optional private cloud library with cross-device progress, reader/RSVP positions, and conflict-safe offline saves
 - Site-specific adapters for accurate content extraction (skydemonorder.com included; generic fallback works on many other sites)
+- Comic reader for manhwa/manga links: full-screen vertical strip that keeps your page per chapter and your latest chapter per series (asurascans.com adapter; generic fallback for common scan-site readers)
 
 ## Tech
 
@@ -62,3 +63,5 @@ The `/api/tts` route must run on Node.js runtime (not Edge) because `msedge-tts`
 ## Adding a new site
 
 Create `lib/adapters/yoursite.ts` exporting a `(html, url) => Chapter` function, then register its hostname in `lib/adapters/index.ts`. The generic fallback uses heuristics (largest `<p>`-dense container, rel=next/prev, text-matching nav links) and works on many sites without any adapter at all.
+
+Comic sites work the same way: add `lib/comics/adapters/yoursite.ts` exporting a `(html, url) => ComicChapter` function and register it in `lib/comics/adapters/index.ts`. Sites listed there load page images straight from their CDN; any other site's images go through the signed `/api/comic-image` proxy, since many scan hosts refuse other sites' referers.

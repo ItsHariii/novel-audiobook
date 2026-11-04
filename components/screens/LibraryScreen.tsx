@@ -7,7 +7,10 @@ import { Chip, StatusLine, type Status } from "@/components/ui/primitives";
 import { EmptyState } from "@/components/player/EmptyState";
 import { formatClock, shortChapter, splitChapterTitle, type BookGroup } from "@/lib/library/group";
 
-type Filter = "all" | "listening" | "reading";
+type Filter = "all" | "listening" | "reading" | "comics";
+
+const pageLine = (item: { page?: number; pageCount?: number }) =>
+  item.pageCount ? `p. ${Math.min((item.page ?? 0) + 1, item.pageCount)}/${item.pageCount}` : "";
 
 export function LibraryScreen(props: {
   books: BookGroup[];
@@ -31,12 +34,14 @@ export function LibraryScreen(props: {
     if (props.focusKey) setExpanded((prev) => ({ ...prev, [props.focusKey!]: true }));
   }, [props.focusKey]);
 
+  const shelf = (b: BookGroup): Exclude<Filter, "all"> => (b.kind === "comic" ? "comics" : b.latest.mode === "audio" ? "listening" : "reading");
   const counts = useMemo(() => ({
     all: props.books.length,
-    listening: props.books.filter((b) => b.latest.mode === "audio").length,
-    reading: props.books.filter((b) => b.latest.mode !== "audio").length,
+    listening: props.books.filter((b) => shelf(b) === "listening").length,
+    reading: props.books.filter((b) => shelf(b) === "reading").length,
+    comics: props.books.filter((b) => shelf(b) === "comics").length,
   }), [props.books]);
-  const books = props.books.filter((b) => filter === "all" || (filter === "listening" ? b.latest.mode === "audio" : b.latest.mode !== "audio"));
+  const books = props.books.filter((b) => filter === "all" || shelf(b) === filter);
 
   return (
     <div className="flex flex-col gap-4">
@@ -47,6 +52,7 @@ export function LibraryScreen(props: {
           <Chip active={filter === "all"} onClick={() => setFilter("all")}>All {counts.all}</Chip>
           <Chip active={filter === "listening"} onClick={() => setFilter("listening")}>Listening {counts.listening}</Chip>
           <Chip active={filter === "reading"} onClick={() => setFilter("reading")}>Reading {counts.reading}</Chip>
+          {counts.comics > 0 && <Chip active={filter === "comics"} onClick={() => setFilter("comics")}>Comics {counts.comics}</Chip>}
         </div>
       )}
       {props.books.length === 0 && <EmptyState onAdd={props.onAdd} />}
@@ -55,7 +61,8 @@ export function LibraryScreen(props: {
       )}
       <ul className="flex flex-col gap-2">
         {books.map((book, index) => {
-          const isCurrent = !!props.currentUrl && book.chapters.some((c) => c.url === props.currentUrl);
+          const comic = book.kind === "comic";
+          const isCurrent = !comic && !!props.currentUrl && book.chapters.some((c) => c.url === props.currentUrl);
           const open = !!expanded[book.key];
           const continueLabel = book.latest.chapterLabel || book.latest.title;
           const sources = book.sources.length === 1 ? book.sources[0] : `${book.sources[0]} +${book.sources.length - 1}`;
@@ -79,6 +86,7 @@ export function LibraryScreen(props: {
                       <span className="text-[11.5px] font-medium text-[var(--color-dim)]">
                         {isCurrent && props.currentStatus ? "· " : ""}{shortChapter(book.latest)}
                         {!!book.latest.audioTime && ` · ${formatClock(book.latest.audioTime)}`}
+                        {comic && book.latest.pageCount ? ` · ${pageLine(book.latest)}` : ""}
                       </span>
                       <ChevronDownIcon size={15} className={`ml-auto text-[var(--color-dim)] transition-transform ${open ? "rotate-180" : ""}`} />
                     </div>
@@ -93,10 +101,12 @@ export function LibraryScreen(props: {
                   <TrashIcon size={18} />
                 </button>
                 <button type="button" onClick={() => props.onRead(book.latest.url)} aria-label={`Read · ${continueLabel}`} title="Read"
-                  className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-[var(--color-muted)] transition hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] active:scale-95">
+                  className={`grid h-11 w-11 shrink-0 place-items-center rounded-full transition active:scale-95 ${comic
+                    ? "bg-[var(--color-accent-soft)] text-[var(--color-accent-text)] hover:brightness-110"
+                    : "text-[var(--color-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]"}`}>
                   <BookIcon size={17} />
                 </button>
-                {isCurrent && props.playing ? (
+                {comic ? null : isCurrent && props.playing ? (
                   <button type="button" onClick={props.onPause} aria-label="Pause" title="Pause"
                     className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[var(--color-accent)] text-[var(--color-on-accent)] transition active:scale-95">
                     <PauseIcon size={16} />
@@ -140,6 +150,7 @@ export function LibraryScreen(props: {
                             {book.sources.length > 1 && <span className="mt-0.5 block text-[11px] text-[var(--color-dim)]">{item.source}</span>}
                           </span>
                           {!!item.audioTime && <span className="tabular shrink-0 text-[11px] text-[var(--color-dim)]">{formatClock(item.audioTime)}</span>}
+                          {comic && !!item.pageCount && <span className="tabular shrink-0 text-[11px] text-[var(--color-dim)]">{pageLine(item)}</span>}
                         </button>
                       </li>
                     );

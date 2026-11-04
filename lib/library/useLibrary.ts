@@ -38,7 +38,8 @@ export function useLibrary() {
       return [{ url: p.chapterUrl, title: p.title, source: p.source, coverSeed: p.bookTitle || p.title,
         bookTitle: p.bookTitle, chapterLabel: p.chapterLabel, bookId: p.bookKey,
         lastAt: local.pending ? local.modifiedAt ?? 0 : local.record ? Date.parse(local.record.updated_at) : 0,
-        audioTime: p.audioTime, mode: normalizeMode(p.mode), coverUrl: p.coverUrl }];
+        audioTime: p.audioTime, mode: normalizeMode(p.mode), coverUrl: p.coverUrl,
+        ...(p.kind === "comic" ? { kind: "comic" as const, page: p.readerChunk, pageCount: p.pageCount } : {}) }];
     }).sort((a, b) => b.lastAt - a.lastAt));
   }, []);
 

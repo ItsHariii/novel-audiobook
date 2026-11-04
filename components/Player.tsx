@@ -11,6 +11,7 @@ import { HomeScreen } from "@/components/screens/HomeScreen";
 import { LibraryScreen } from "@/components/screens/LibraryScreen";
 import { NowPlayingScreen } from "@/components/screens/NowPlayingScreen";
 import { ReaderScreen } from "@/components/screens/ReaderScreen";
+import { ComicReaderScreen } from "@/components/screens/ComicReaderScreen";
 import { FONT_MAX, FONT_MIN, ReaderSettingsSheet, type ReaderPrefs } from "@/components/screens/ReaderSettings";
 import { SearchScreen } from "@/components/screens/SearchScreen";
 import { YouScreen } from "@/components/screens/YouScreen";
@@ -25,6 +26,8 @@ import { useTitleRepair } from "@/lib/library/useTitleRepair";
 import { bookKey, type ChapterProgress } from "@/lib/library/types";
 import { writeLegacyPosition } from "@/lib/library/local";
 import { authorizedFetch } from "@/lib/supabase/browser";
+import { looksLikeComic } from "@/lib/comics/detect";
+import { clearLocalPosition } from "@/lib/comics/position";
 import { usePlaybackSession } from "@/lib/audio/usePlaybackSession";
 import { restoreApplies, type PendingRestore } from "@/lib/audio/restore";
 import {
@@ -154,10 +157,12 @@ function findChunkAtTime(cumDurations: number[], t: number): number {
 }
 
 export default function Player({ library }: { library: ReturnType<typeof useLibrary> }) {
+  // Comics carry their own titles; repair and audio only ever deal with novels.
+  const novelEntries = useMemo(() => library.entries.filter((e) => e.kind !== "comic"), [library.entries]);
   const titleRepair = useTitleRepair({
     enabled: library.enabled && !!library.user,
     hydrated: library.hydrated,
-    entries: library.entries,
+    entries: novelEntries,
     restore: library.restore,
     capture: library.capture,
     flush: library.flush,
@@ -205,6 +210,8 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
   // Navigation: a tab underneath, optionally covered by a chapter surface.
   const [tab, setTab] = useState<Tab>("home");
   const [surface, setSurface] = useState<"reader" | "player" | null>(null);
+  // Open comic chapter; the comic reader sits above everything else.
+  const [comicUrl, setComicUrl] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [readerSettingsOpen, setReaderSettingsOpen] = useState(false);
   const [focusBook, setFocusBook] = useState<string | null>(null);
@@ -660,13 +667,13 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
     if (didAutoResumeRef.current) return;
     if (!localHydrated) return;
     if (library.enabled && (!library.hydrated || !library.user)) return;
-    const savedUrl = library.entries[0]?.url || localStorage.getItem(LS_URL);
+    const savedUrl = novelEntries[0]?.url || localStorage.getItem(LS_URL);
     if (!savedUrl) return;
     didAutoResumeRef.current = true;
     const saved = library.restore(savedUrl);
     if (saved) setViewMode(normalizeMode(saved.mode));
     void loadChapterFromUrl(savedUrl, false, saved?.voice);
-  }, [loadChapterFromUrl, localHydrated, library.enabled, library.hydrated, library.user, library.entries, library.restore]);
+  }, [loadChapterFromUrl, localHydrated, library.enabled, library.hydrated, library.user, novelEntries, library.restore]);
 
   useEffect(() => {
     if (!current) return;
@@ -1177,7 +1184,9 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
         target?.tagName === "INPUT" ||
         target?.tagName === "TEXTAREA" ||
         target?.tagName === "SELECT" ||
-        target?.closest?.("[role=dialog]")
+        target?.closest?.("[role=dialog]") ||
+        // The comic reader owns the keyboard while it is open.
+        document.querySelector("[data-comic-reader]")
       )
         return;
       if (e.key === " ") {
@@ -1278,7 +1287,17 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
     return () => window.removeEventListener("keydown", onKey);
   }, [surface, openSurface]);
 
+  const comicUrls = useMemo(() => new Set(libraryHistory.filter((h) => h.kind === "comic").map((h) => h.url)), [libraryHistory]);
+  const openComic = (url: string) => {
+    openSurface(null);
+    setComicUrl(url);
+  };
+  const visitComic = useCallback((item: HistoryItem) => {
+    setHistory((prev) => [item, ...prev.filter((p) => p.url !== item.url)]);
+  }, []);
+
   const pickHistory = (url: string, options: { play?: boolean; surface?: "reader" | "player" } = {}) => {
+    if (comicUrls.has(url)) { openComic(url); return; }
     if (current?.chapter.url === url && !chapterLoading) {
       openSurface(options.surface ?? "reader");
       if (options.play && !isPlaying && !current.audioPending) void togglePlay();
@@ -1294,6 +1313,7 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
   // Play buttons on Home and Library: the open chapter just starts playing
   // where it is; anything else loads and opens the player.
   const resume = (url: string) => {
+    if (comicUrls.has(url)) { openComic(url); return; }
     if (current?.chapter.url === url && !chapterLoading) {
       if (current.audioPending || playback.error) openSurface("reader");
       else if (!isPlaying) void togglePlay();
@@ -1344,8 +1364,10 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
       for (const url of urls) {
         localStorage.removeItem(LS_POSITION_PREFIX + url);
         localStorage.removeItem(`nab:reader:${url}`);
+        clearLocalPosition(url);
       }
     } catch {}
+    if (comicUrl && urls.includes(comicUrl)) setComicUrl(null);
     setHistory((prev) => prev.filter((h) => !urls.includes(h.url)));
     if (library.enabled) await library.remove(urls);
   };
@@ -1360,7 +1382,7 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
     audioRef.current?.removeAttribute("src");
     audioRef.current?.load();
     setCurrent(null); setIsPlaying(false); setChapterLoading(false);
-    setSurface(null); setTab("home");
+    setSurface(null); setComicUrl(null); setTab("home");
     await library.signOut();
     didAutoResumeRef.current = false;
   };
@@ -1658,9 +1680,25 @@ export default function Player({ library }: { library: ReturnType<typeof useLibr
         loading={chapterLoading}
         error={error}
         loadedUrl={loadedRequest}
-        onSubmit={(url) => { setLoadedRequest(""); void loadChapterFromUrl(url, false); }}
+        onSubmit={(url) => {
+          if (looksLikeComic(url)) { setAddOpen(false); openComic(url); return; }
+          setLoadedRequest(""); void loadChapterFromUrl(url, false);
+        }}
+        onOpenComic={(url) => { setAddOpen(false); setError(null); openComic(url); }}
         onLoaded={() => { setAddOpen(false); openSurface("reader"); }}
       />
+
+      {comicUrl && (
+        <ComicReaderScreen
+          url={comicUrl}
+          onUrl={setComicUrl}
+          restore={library.restore}
+          capture={library.capture}
+          flush={library.flush}
+          onVisit={visitComic}
+          onClose={() => setComicUrl(null)}
+        />
+      )}
 
       <ReaderSettingsSheet
         open={readerSettingsOpen}

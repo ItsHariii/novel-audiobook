@@ -5,7 +5,7 @@ import { Sheet } from "@/components/ui/Sheet";
 import { AlertIcon, LinkIcon } from "@/components/ui/icons";
 import { Button } from "@/components/ui/primitives";
 
-const KNOWN_SOURCES = ["skydemonorder.com", "maehwasup.com", "novtales.com", "amethystwriters.com"];
+const KNOWN_SOURCES = ["skydemonorder.com", "maehwasup.com", "novtales.com", "amethystwriters.com", "asurascans.com"];
 
 type Phase = "idle" | "working" | "failed";
 
@@ -32,6 +32,8 @@ export function AddSheet(props: {
   error: string | null;
   loadedUrl?: string;
   onSubmit: (url: string) => void;
+  /** Open the link in the comic reader instead (for comic sites we didn't recognise). */
+  onOpenComic: (url: string) => void;
   onLoaded: () => void;
 }) {
   const [phase, setPhase] = useState<Phase>("idle");
@@ -76,7 +78,7 @@ export function AddSheet(props: {
   const link = describeLink(attempt || props.url);
 
   return (
-    <Sheet open={props.open} onClose={props.onClose} label="Add a novel">
+    <Sheet open={props.open} onClose={props.onClose} label="Add a novel or comic">
       {phase === "working" && (
         <div aria-live="polite">
           <div className="flex items-center gap-3.5">
@@ -120,14 +122,18 @@ export function AddSheet(props: {
             <Button className="flex-1" onClick={() => submit()}>Try again</Button>
             <Button variant="secondary" className="flex-1" onClick={() => { setPhase("idle"); setTimeout(() => inputRef.current?.select(), 0); }}>Edit link</Button>
           </div>
+          <button type="button" onClick={() => { setPhase("idle"); props.onOpenComic(attempt); }}
+            className="mt-2.5 h-11 w-full rounded-xl text-[13.5px] font-semibold text-[var(--color-accent-text)] hover:bg-[var(--color-hover)]">
+            It&apos;s a comic · open in comic reader
+          </button>
         </div>
       )}
 
       {phase === "idle" && (
         <form onSubmit={submit}>
-          <h2 className="font-serif text-[24px] font-medium">Add a novel</h2>
+          <h2 className="font-serif text-[24px] font-medium">Add a novel or comic</h2>
           <p className="mt-1.5 text-sm leading-relaxed text-[var(--color-muted)]">
-            Paste a link to a chapter. Tome follows the next and previous links for you.
+            Paste a link to a chapter. Tome follows the next and previous links for you, and opens manhwa and manga in a full-screen reader.
           </p>
           <label htmlFor="add-url" className="sr-only">Chapter URL</label>
           <div className="mt-5 flex h-[52px] items-center gap-2.5 rounded-[14px] border border-[var(--color-border-strong)] bg-[var(--color-bg)] pl-3.5 pr-1.5 focus-within:border-[var(--color-accent)]">
