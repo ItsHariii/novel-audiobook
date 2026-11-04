@@ -35,6 +35,8 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
+  // Draw under the status bar and Dynamic Island; screens pad themselves with the safe-area insets.
+  viewportFit: "cover",
   themeColor: [
     { media: "(prefers-color-scheme: dark)", color: "#0f0e14" },
     { media: "(prefers-color-scheme: light)", color: "#faf4e6" },
