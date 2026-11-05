@@ -30,8 +30,10 @@ function toHistory(c: ComicChapter, pos: ComicPosition): HistoryItem {
 }
 
 /**
- * Full-screen vertical comic reader. Keeps its place per chapter (page and
- * how far down it) in the library, and the library's latest chapter per
+ * Full-screen vertical comic reader. Chapters run on into each other: once a
+ * chapter is most of the way read, the next one is appended below it, so
+ * scrolling never stops at a chapter's end. Keeps its place per chapter (page
+ * and how far down it) in the library, and the library's latest chapter per
  * series is where "Read" picks up.
  */
 export function ComicReaderScreen(props: {
@@ -43,9 +45,10 @@ export function ComicReaderScreen(props: {
   onVisit: (item: HistoryItem) => void;
   onClose: () => void;
 }) {
-  const { chapter, loading, error, retry, prefetch } = useComic(props.url);
+  const { chapter: entry, chapters, loading, error, retry, prefetch, extend, tail } = useComic(props.url);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const pageRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const sectionRefs = useRef(new Map<string, HTMLElement>());
+  const pageRefs = useRef(new Map<string, Array<HTMLDivElement | null>>());
   const posRef = useRef<ComicPosition>({ page: 0, offset: 0 });
   const savedAt = useRef(0);
   const visited = useRef("");
@@ -54,23 +57,40 @@ export function ComicReaderScreen(props: {
   const restoring = useRef<ComicPosition | null>(null);
   const [chromeHidden, setChromeHidden] = useState(false);
   const [pos, setPos] = useState<ComicPosition>({ page: 0, offset: 0 });
+  // Index in the strip of the chapter at the top of the screen.
+  const [active, setActive] = useState(0);
+  // Chapters well behind the reader collapse to a box of their measured height,
+  // so a long session doesn't keep hundreds of pages alive.
+  const [heights, setHeights] = useState<Record<string, number>>({});
   const [listOpen, setListOpen] = useState(false);
-  const [failed, setFailed] = useState<Record<number, number>>({});
+  const [failed, setFailed] = useState<Record<string, number>>({});
   const [fullscreen, setFullscreen] = useState(false);
   const [canFullscreen, setCanFullscreen] = useState(false);
+
+  const strip = chapters ?? [];
+  const activeIndex = Math.max(0, Math.min(active, strip.length - 1));
+  const chapter: ComicChapter | null = strip[activeIndex] ?? null;
+  const last: ComicChapter | undefined = strip[strip.length - 1];
 
   const propsRef = useRef(props);
   propsRef.current = props;
   const chapterRef = useRef(chapter);
   chapterRef.current = chapter;
+  const stripRef = useRef(strip);
+  stripRef.current = strip;
+  const activeRef = useRef(activeIndex);
+  activeRef.current = activeIndex;
+  const heightsRef = useRef(heights);
+  heightsRef.current = heights;
+  const tailRef = useRef(tail);
+  tailRef.current = tail;
 
-  const save = useCallback((force = false) => {
-    const c = chapterRef.current;
+  const save = useCallback((force = false, c: ComicChapter | null = chapterRef.current, at?: ComicPosition) => {
     if (!c) return;
     const now = Date.now();
     if (!force && now - savedAt.current < SAVE_EVERY_MS) return;
     savedAt.current = now;
-    const p = restoring.current ?? posRef.current;
+    const p = at ?? restoring.current ?? posRef.current;
     writeLocalPosition(c.url, p);
     propsRef.current.capture(toProgress(c, p));
     // The on-device library only needs to hear about new pages, not every scroll.
@@ -81,10 +101,10 @@ export function ComicReaderScreen(props: {
     }
   }, []);
 
-  const measure = useCallback(() => {
+  const measure = useCallback((c: ComicChapter) => {
     const tops: number[] = [];
     const heights: number[] = [];
-    for (const el of pageRefs.current) {
+    for (const el of (pageRefs.current.get(c.url) ?? []).slice(0, c.pages.length)) {
       if (!el) continue;
       tops.push(el.offsetTop);
       heights.push(el.offsetHeight);
@@ -95,20 +115,24 @@ export function ComicReaderScreen(props: {
   const applyRestore = useCallback(() => {
     const el = scrollRef.current;
     const target = restoring.current;
-    if (!el || !target) return;
-    const { tops, heights } = measure();
+    const first = stripRef.current[0];
+    if (!el || !target || !first) return;
+    const { tops, heights } = measure(first);
     el.scrollTop = scrollFor(tops, heights, target);
   }, [measure]);
 
-  // New chapter: jump to its saved place (or the top), then record the visit.
+  // Opened chapter: jump to its saved place (or the top), then record the visit.
   useLayoutEffect(() => {
-    if (!chapter) return;
+    if (!entry) return;
     setFailed({});
-    pageRefs.current = pageRefs.current.slice(0, chapter.pages.length);
-    const saved = propsRef.current.restore(chapter.url) ?? propsRef.current.restore(props.url);
+    setHeights({});
+    setActive(0);
+    activeRef.current = 0;
+    chapterRef.current = entry;
+    const saved = propsRef.current.restore(entry.url) ?? propsRef.current.restore(props.url);
     const start: ComicPosition = saved?.kind === "comic"
       ? { page: saved.readerChunk, offset: saved.readerOffset }
-      : readLocalPosition(chapter.url) ?? { page: 0, offset: 0 };
+      : readLocalPosition(entry.url) ?? { page: 0, offset: 0 };
     posRef.current = start;
     setPos(start);
     if (start.page > 0 || start.offset > 0) {
@@ -121,8 +145,8 @@ export function ComicReaderScreen(props: {
     lastY.current = scrollRef.current?.scrollTop ?? 0;
     setChromeHidden(false);
     // Record the visit (and put the chapter in the library) right away.
-    save(true);
-  }, [chapter, props.url, applyRestore, save]);
+    save(true, entry);
+  }, [entry, props.url, applyRestore, save]);
 
   // The user moving the page ends any restore in progress; until then, images
   // loading above the saved spot keep it pinned.
@@ -133,7 +157,7 @@ export function ComicReaderScreen(props: {
     const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
     for (const e of events) el.addEventListener(e, stop, { passive: true });
     return () => { for (const e of events) el.removeEventListener(e, stop); };
-  }, [chapter]);
+  }, [entry]);
 
   const frame = useRef<number | null>(null);
   const onScroll = () => {
@@ -141,20 +165,61 @@ export function ComicReaderScreen(props: {
     frame.current = requestAnimationFrame(() => {
       frame.current = null;
       const el = scrollRef.current;
-      const c = chapterRef.current;
-      if (!el || !c) return;
+      const list = stripRef.current;
+      if (!el || list.length === 0) return;
       const y = el.scrollTop;
       const dy = y - lastY.current;
       if (!restoring.current && Math.abs(dy) > 6) setChromeHidden(dy > 0 && y > 80);
       lastY.current = y;
-      const { tops, heights } = measure();
+
+      // Which chapter is at the top of the screen.
+      let idx = 0;
+      for (let i = 0; i < list.length; i++) {
+        const s = sectionRefs.current.get(list[i].url);
+        if (s && s.offsetTop <= y + 1) idx = i;
+      }
+      const prevIdx = activeRef.current;
+      if (idx !== prevIdx) {
+        // Leave the old chapter finished (going down) or at its start (going up).
+        const old = list[prevIdx];
+        if (old) save(true, old, idx > prevIdx ? { page: old.pages.length - 1, offset: 1 } : { page: 0, offset: 0 });
+        restoring.current = null;
+        const collapse: Record<string, number> = {};
+        list.forEach((ch, i) => {
+          const wasHidden = i < prevIdx - 1 && heightsRef.current[ch.url] !== undefined;
+          const s = sectionRefs.current.get(ch.url);
+          if (i < idx - 1 && !wasHidden && s) collapse[ch.url] = s.getBoundingClientRect().height;
+        });
+        if (Object.keys(collapse).length) setHeights((h) => ({ ...h, ...collapse }));
+        activeRef.current = idx;
+        chapterRef.current = list[idx];
+        setActive(idx);
+      }
+
+      const c = list[idx];
+      const { tops, heights } = measure(c);
       const next = restoring.current ?? locate(tops, heights, y);
       posRef.current = next;
       setPos((p) => (p.page === next.page && Math.abs(p.offset - next.offset) < 0.01 ? p : next));
-      if (chapterProgress(next, c.pages.length) > 0.6) prefetch(c.nextUrl);
-      save();
+      save(idx !== prevIdx, c);
+
+      // Run on into the next chapter: fetch it early, append it at 80%.
+      if (idx === list.length - 1 && c.nextUrl) {
+        const seen = chapterProgress(locate(tops, heights, y + el.clientHeight), c.pages.length);
+        const nearEnd = el.scrollHeight - (y + el.clientHeight) < el.clientHeight * 1.5;
+        if (seen > 0.5) prefetch(c.nextUrl);
+        // After a failed load, only the Retry button tries again.
+        if ((seen >= 0.8 || nearEnd) && tailRef.current !== "error") extend();
+      }
     });
   };
+
+  // A chapter too short to scroll would never trigger the append above.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !last?.nextUrl || tailRef.current === "error") return;
+    if (el.scrollHeight - (el.scrollTop + el.clientHeight) < el.clientHeight * 1.5) extend();
+  }, [last, extend]);
 
   // Keep the place when the tab hides or the reader closes.
   useEffect(() => {
@@ -184,10 +249,18 @@ export function ComicReaderScreen(props: {
     else void document.documentElement.requestFullscreen?.().catch(() => {});
   };
 
+  // A chapter already in the strip is scrolled to; anything else opens fresh.
   const go = useCallback((url: string | null | undefined) => {
     if (!url) return;
-    save(true);
     setListOpen(false);
+    const el = scrollRef.current;
+    const section = stripRef.current.some((c) => c.url === url) ? sectionRefs.current.get(url) : undefined;
+    if (el && section) {
+      restoring.current = null;
+      el.scrollTop = section.offsetTop;
+      return;
+    }
+    save(true);
     propsRef.current.onUrl(url);
   }, [save]);
 
@@ -203,7 +276,7 @@ export function ComicReaderScreen(props: {
   }, [go]);
 
   // Focus the scroller so arrow/space keys scroll the strip right away.
-  useEffect(() => { scrollRef.current?.focus({ preventScroll: true }); }, [chapter]);
+  useEffect(() => { scrollRef.current?.focus({ preventScroll: true }); }, [entry]);
 
   const progress = chapter ? chapterProgress(pos, chapter.pages.length) : 0;
   const title = chapter?.bookTitle ?? "Loading…";
@@ -213,48 +286,88 @@ export function ComicReaderScreen(props: {
     <section aria-label="Comic reader" data-comic-reader className="fixed inset-0 z-50 bg-[var(--color-bg)] text-[var(--color-text)]">
       <div ref={scrollRef} tabIndex={-1} onScroll={onScroll} onClick={() => setChromeHidden((h) => !h)}
         className="relative h-full overflow-y-auto overscroll-contain outline-none [overflow-anchor:none]">
-        {chapter ? (
+        {last ? (
           <>
             {/* Pages start at the very top and scroll under the status bar and Dynamic Island. */}
-            {chapter.pages.map((p, i) => {
-              const ratio = p.width && p.height ? `${p.width} / ${p.height}` : undefined;
-              const retries = failed[i] ?? 0;
+            {strip.map((ch, ci) => {
+              const remembered = heights[ch.url];
+              const hidden = ci < activeIndex - 1 && remembered !== undefined;
               return (
-                <div key={`${chapter.url}#${i}`} ref={(el) => { pageRefs.current[i] = el; }}
-                  className="relative mx-auto w-full max-w-[800px]" style={ratio ? { aspectRatio: ratio } : { minHeight: "60vh" }}>
-                  {retries > 0 && retries % 2 === 1 ? (
-                    <div className="absolute inset-0 grid place-items-center bg-[var(--color-panel-2)]">
-                      <button type="button" onClick={(e) => { e.stopPropagation(); setFailed((f) => ({ ...f, [i]: retries + 1 })); }}
-                        className="flex h-11 items-center gap-2 rounded-full bg-[var(--color-panel)] px-4 text-sm font-semibold hover:bg-[var(--color-hover)]">
-                        <RetryIcon size={16} />Page {i + 1} didn&apos;t load · Retry
-                      </button>
-                    </div>
-                  ) : (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img key={retries} src={retries ? `${p.url}${p.url.includes("?") ? "&" : "?"}r=${retries}` : p.url}
-                      alt={`Page ${i + 1} of ${chapter.pages.length}`} width={p.width} height={p.height}
-                      loading={i < 3 ? "eager" : "lazy"} decoding="async" referrerPolicy="no-referrer" draggable={false}
-                      onLoad={(e) => {
-                        if (!ratio) (e.currentTarget.parentElement as HTMLElement).style.minHeight = "0";
-                        if (restoring.current) applyRestore();
-                      }}
-                      onError={() => setFailed((f) => ({ ...f, [i]: (f[i] ?? 0) + 1 }))}
-                      className="block h-auto w-full select-none" />
+                <section key={ch.url} aria-label={ch.chapterLabel}
+                  ref={(el) => { if (el) sectionRefs.current.set(ch.url, el); else sectionRefs.current.delete(ch.url); }}
+                  style={hidden ? { height: remembered } : remembered !== undefined ? { minHeight: remembered } : undefined}>
+                  {hidden ? null : (
+                    <>
+                      {ci > 0 ? (
+                        <div className="mx-auto flex max-w-[800px] items-center gap-3 px-6 py-7 text-[12px] font-medium text-[var(--color-dim)]">
+                          <span aria-hidden className="h-px flex-1 bg-[var(--color-border)]" />
+                          <span className="truncate">{ch.chapterLabel}</span>
+                          <span aria-hidden className="h-px flex-1 bg-[var(--color-border)]" />
+                        </div>
+                      ) : null}
+                      {ch.pages.map((p, i) => {
+                        const ratio = p.width && p.height ? `${p.width} / ${p.height}` : undefined;
+                        const key = `${ch.url}#${i}`;
+                        const retries = failed[key] ?? 0;
+                        return (
+                          <div key={key} ref={(el) => {
+                            let refs = pageRefs.current.get(ch.url);
+                            if (!refs) { refs = []; pageRefs.current.set(ch.url, refs); }
+                            refs[i] = el;
+                          }}
+                            className="relative mx-auto w-full max-w-[800px]" style={ratio ? { aspectRatio: ratio } : { minHeight: "60vh" }}>
+                            {retries > 0 && retries % 2 === 1 ? (
+                              <div className="absolute inset-0 grid place-items-center bg-[var(--color-panel-2)]">
+                                <button type="button" onClick={(e) => { e.stopPropagation(); setFailed((f) => ({ ...f, [key]: retries + 1 })); }}
+                                  className="flex h-11 items-center gap-2 rounded-full bg-[var(--color-panel)] px-4 text-sm font-semibold hover:bg-[var(--color-hover)]">
+                                  <RetryIcon size={16} />Page {i + 1} didn&apos;t load · Retry
+                                </button>
+                              </div>
+                            ) : (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img key={retries} src={retries ? `${p.url}${p.url.includes("?") ? "&" : "?"}r=${retries}` : p.url}
+                                alt={`${ch.chapterLabel}, page ${i + 1} of ${ch.pages.length}`} width={p.width} height={p.height}
+                                loading={i < 3 ? "eager" : "lazy"} decoding="async" referrerPolicy="no-referrer" draggable={false}
+                                onLoad={(e) => {
+                                  if (!ratio) (e.currentTarget.parentElement as HTMLElement).style.minHeight = "0";
+                                  if (restoring.current) applyRestore();
+                                }}
+                                onError={() => setFailed((f) => ({ ...f, [key]: (f[key] ?? 0) + 1 }))}
+                                className="block h-auto w-full select-none" />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </>
                   )}
-                </div>
+                </section>
               );
             })}
             <div className="mx-auto flex max-w-[800px] flex-col items-center gap-3 px-6 pb-[calc(env(safe-area-inset-bottom,0px)+9rem)] pt-14 text-center">
-              <p className="text-[13px] text-[var(--color-dim)]">End of {chapter.chapterLabel}</p>
-              {chapter.nextUrl ? (
-                <Button className="w-full max-w-xs" onClick={(e) => { e.stopPropagation(); go(chapter.nextUrl); }}>
-                  <NextChapterIcon size={17} />Next chapter
-                </Button>
+              {last.nextUrl ? (
+                tail === "error" ? (
+                  <>
+                    <p className="text-[13px] text-[var(--color-dim)]">Couldn&apos;t load the next chapter</p>
+                    <Button className="w-full max-w-xs" onClick={(e) => { e.stopPropagation(); extend(); }}>
+                      <RetryIcon size={16} />Retry
+                    </Button>
+                  </>
+                ) : (
+                  <div className="flex min-h-[40vh] flex-col items-center gap-3" aria-live="polite">
+                    <span aria-hidden className="relative block size-6">
+                      <span className="absolute inset-0 animate-spin rounded-full border-2 border-[var(--color-accent-soft)] border-t-[var(--color-accent)]" />
+                    </span>
+                    <p className="text-[13px] text-[var(--color-dim)]">Loading the next chapter…</p>
+                  </div>
+                )
               ) : (
-                <p className="text-sm font-medium">You&apos;re caught up.</p>
+                <>
+                  <p className="text-[13px] text-[var(--color-dim)]">End of {last.chapterLabel}</p>
+                  <p className="text-sm font-medium">You&apos;re caught up.</p>
+                  <button type="button" onClick={(e) => { e.stopPropagation(); props.onClose(); }}
+                    className="h-11 rounded-full px-4 text-sm font-medium text-[var(--color-muted)] hover:bg-[var(--color-hover)]">Back to library</button>
+                </>
               )}
-              <button type="button" onClick={(e) => { e.stopPropagation(); props.onClose(); }}
-                className="h-11 rounded-full px-4 text-sm font-medium text-[var(--color-muted)] hover:bg-[var(--color-hover)]">Back to library</button>
             </div>
           </>
         ) : error && !loading ? (
