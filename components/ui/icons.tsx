@@ -55,6 +55,7 @@ export const LinkIcon = (p: IconProps) => <Stroke {...p}><path d="M10 13a5 5 0 0
 export const CheckIcon = (p: IconProps) => <Stroke strokeWidth={2.6} {...p}><path d="M20 6 9 17l-5-5" /></Stroke>;
 export const CloseIcon = (p: IconProps) => <Stroke strokeWidth={1.9} {...p}><path d="M6 6l12 12M18 6 6 18" /></Stroke>;
 export const ExpandIcon = (p: IconProps) => <Stroke {...p}><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></Stroke>;
+export const AutoScrollIcon = (p: IconProps) => <Stroke strokeWidth={1.9} {...p}><path d="m7 6 5 5 5-5" /><path d="m7 13 5 5 5-5" /></Stroke>;
 export const ShrinkIcon = (p: IconProps) => <Stroke {...p}><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></Stroke>;
 export const AlertIcon = (p: IconProps) => <Stroke {...p}><circle cx="12" cy="12" r="9" /><path d="M12 7.5v5.5M12 16.5v.01" /></Stroke>;
 export const RetryIcon = (p: IconProps) => <Stroke {...p}><path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4v7h-7" /></Stroke>;
