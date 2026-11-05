@@ -20,15 +20,27 @@ function preloadImages(chapter: ComicChapter, count = 2) {
   }
 }
 
-/** One comic chapter at a time, with the next one fetched ahead of need. */
+export type TailState = "idle" | "loading" | "error";
+
+/**
+ * The chapter that was opened, followed by the chapters appended below it as
+ * the reader scrolls on. Opening another URL starts a fresh strip.
+ */
 export function useComic(url: string | null) {
   const [loaded, setLoaded] = useState<{ url: string; chapter: ComicChapter } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // Chapters appended after the opened one, tagged with the URL they follow on from.
+  const [more, setMore] = useState<{ entry: string; list: ComicChapter[] }>({ entry: "", list: [] });
+  const [tail, setTail] = useState<{ entry: string; state: TailState }>({ entry: "", state: "idle" });
   const ahead = useRef(new Map<string, Promise<ComicChapter>>());
+  const urlRef = useRef(url);
+  urlRef.current = url;
+  const extending = useRef<string | null>(null);
 
   useEffect(() => {
+    extending.current = null;
     if (!url) { setLoaded(null); setError(null); setLoading(false); return; }
     const ac = new AbortController();
     setLoading(true);
@@ -49,7 +61,43 @@ export function useComic(url: string | null) {
     ahead.current.set(next, p);
   }, []);
 
+  const chapter = loaded && loaded.url === url ? loaded.chapter : null;
+  const list = more.entry === url ? more.list : [];
+  const chapters = chapter ? [chapter, ...list] : null;
+  const chaptersRef = useRef(chapters);
+  chaptersRef.current = chapters;
+
+  /** Append the chapter after the last one in the strip, once. */
+  const extend = useCallback(() => {
+    const entry = urlRef.current;
+    const strip = chaptersRef.current;
+    const next = strip?.[strip.length - 1]?.nextUrl;
+    if (!entry || !strip || !next || extending.current === next) return;
+    // A source whose "next" loops back would otherwise append forever.
+    if (strip.some((c) => c.url === next)) return;
+    extending.current = next;
+    setTail({ entry, state: "loading" });
+    prefetch(next);
+    ahead.current.get(next)!.then(
+      (c) => {
+        ahead.current.delete(next);
+        if (urlRef.current !== entry) return;
+        extending.current = null;
+        setMore((m) => {
+          const prev = m.entry === entry ? m.list : [];
+          return prev.some((p) => p.url === c.url) ? m : { entry, list: [...prev, c] };
+        });
+        setTail({ entry, state: "idle" });
+      },
+      () => {
+        if (urlRef.current !== entry) return;
+        extending.current = null;
+        setTail({ entry, state: "error" });
+      },
+    );
+  }, [prefetch]);
+
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
-  return { chapter: loaded && loaded.url === url ? loaded.chapter : null, loading, error, retry, prefetch };
+  return { chapter, chapters, loading, error, retry, prefetch, extend, tail: tail.entry === url ? tail.state : "idle" as TailState };
 }
