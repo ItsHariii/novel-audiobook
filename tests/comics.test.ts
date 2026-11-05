@@ -112,3 +112,15 @@ test("a comic never merges with a novel of the same name; its chapters share one
   assert.equal(groups[0].latest.chapterLabel, "Chapter 2");
   assert.equal(groups[1].kind, undefined);
 });
+
+test("auto-scroll speeds stay in a readable range and scale with the strip", async () => {
+  const { AUTO_SCROLL_SPEEDS, autoScrollRate } = await import("../lib/comics/autoScroll");
+  const phone = AUTO_SCROLL_SPEEDS.map((s) => autoScrollRate(s, 390));
+  assert.deepEqual(phone, [45, 67.5, 90, 135, 180]);
+  // A phone screen of art (~750px) takes between ~4s and ~17s to pass.
+  assert.ok(750 / phone[0] < 20 && 750 / phone[phone.length - 1] > 3);
+  // Wider strips have bigger pages, so the same pace moves more pixels, up to the 800px cap.
+  assert.equal(autoScrollRate(1, 780), 180);
+  assert.equal(autoScrollRate(1, 1600), autoScrollRate(1, 800));
+  assert.equal(autoScrollRate(1, 100), autoScrollRate(1, 280));
+});

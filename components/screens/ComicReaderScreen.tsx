@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Sheet } from "@/components/ui/Sheet";
-import { AlertIcon, ChevronLeftIcon, ExpandIcon, ListIcon, NextChapterIcon, PrevChapterIcon, RetryIcon, ShrinkIcon } from "@/components/ui/icons";
+import { AlertIcon, AutoScrollIcon, ChevronLeftIcon, ExpandIcon, ListIcon, NextChapterIcon, PauseIcon, PlayIcon, PrevChapterIcon, RetryIcon, ShrinkIcon } from "@/components/ui/icons";
 import { Button, IconButton } from "@/components/ui/primitives";
 import { LoadingSkeleton } from "@/components/player/LoadingSkeleton";
 import { useComic } from "@/lib/comics/useComic";
+import { AUTO_SCROLL_SPEEDS, DEFAULT_AUTO_SCROLL_SPEED, readAutoScrollSpeed, speedLabel, useAutoScroll, writeAutoScrollSpeed, type AutoScrollSpeed } from "@/lib/comics/autoScroll";
 import { chapterProgress, locate, readLocalPosition, scrollFor, writeLocalPosition, type ComicPosition } from "@/lib/comics/position";
 import type { ComicChapter } from "@/lib/comics/types";
 import type { ChapterProgress } from "@/lib/library/types";
@@ -66,6 +67,10 @@ export function ComicReaderScreen(props: {
   const [failed, setFailed] = useState<Record<string, number>>({});
   const [fullscreen, setFullscreen] = useState(false);
   const [canFullscreen, setCanFullscreen] = useState(false);
+  // Auto-scroll: the speed row shows in the bottom bar once opened from its button.
+  const [autoOpen, setAutoOpen] = useState(false);
+  const [autoOn, setAutoOn] = useState(false);
+  const [autoSpeed, setAutoSpeed] = useState<AutoScrollSpeed>(DEFAULT_AUTO_SCROLL_SPEED);
 
   const strip = chapters ?? [];
   const activeIndex = Math.max(0, Math.min(active, strip.length - 1));
@@ -84,6 +89,8 @@ export function ComicReaderScreen(props: {
   heightsRef.current = heights;
   const tailRef = useRef(tail);
   tailRef.current = tail;
+  const listOpenRef = useRef(listOpen);
+  listOpenRef.current = listOpen;
 
   const save = useCallback((force = false, c: ComicChapter | null = chapterRef.current, at?: ComicPosition) => {
     if (!c) return;
@@ -144,6 +151,7 @@ export function ComicReaderScreen(props: {
     }
     lastY.current = scrollRef.current?.scrollTop ?? 0;
     setChromeHidden(false);
+    setAutoOn(false);
     // Record the visit (and put the chapter in the library) right away.
     save(true, entry);
   }, [entry, props.url, applyRestore, save]);
@@ -249,6 +257,32 @@ export function ComicReaderScreen(props: {
     else void document.documentElement.requestFullscreen?.().catch(() => {});
   };
 
+  useEffect(() => { setAutoSpeed(readAutoScrollSpeed()); }, []);
+
+  useAutoScroll(scrollRef, {
+    running: autoOn,
+    speed: autoSpeed,
+    held: () => listOpenRef.current,
+    // Wait at the bottom while the next chapter loads; stop once there's nothing more.
+    onBottom: () => {
+      const end = stripRef.current[stripRef.current.length - 1];
+      if (!end?.nextUrl || tailRef.current === "error") {
+        setAutoOn(false);
+        setChromeHidden(false);
+      }
+    },
+  });
+
+  const startAuto = (speed: AutoScrollSpeed = autoSpeed) => {
+    if (speed !== autoSpeed) {
+      setAutoSpeed(speed);
+      writeAutoScrollSpeed(speed);
+    }
+    restoring.current = null;
+    setAutoOn(true);
+    setChromeHidden(true);
+  };
+
   // A chapter already in the strip is scrolled to; anything else opens fresh.
   const go = useCallback((url: string | null | undefined) => {
     if (!url) return;
@@ -284,7 +318,10 @@ export function ComicReaderScreen(props: {
 
   return (
     <section aria-label="Comic reader" data-comic-reader className="fixed inset-0 z-50 bg-[var(--color-bg)] text-[var(--color-text)]">
-      <div ref={scrollRef} tabIndex={-1} onScroll={onScroll} onClick={() => setChromeHidden((h) => !h)}
+      <div ref={scrollRef} tabIndex={-1} onScroll={onScroll} onClick={() => {
+        // A tap while auto-scrolling stops it and brings the bar back to resume or change speed.
+        if (autoOn) { setAutoOn(false); setChromeHidden(false); } else setChromeHidden((h) => !h);
+      }}
         className="relative h-full overflow-y-auto overscroll-contain outline-none [overflow-anchor:none]">
         {last ? (
           <>
@@ -404,6 +441,28 @@ export function ComicReaderScreen(props: {
         chromeHidden ? "pointer-events-none translate-y-full opacity-0" : ""
       }`} aria-hidden={chromeHidden || undefined}>
         <div className="mx-auto max-w-3xl px-4 pt-3">
+          {autoOpen ? (
+            <div className="mb-3 flex items-center gap-2">
+              <button type="button" onClick={() => (autoOn ? setAutoOn(false) : startAuto())}
+                aria-label={autoOn ? "Pause auto-scroll" : "Start auto-scroll"} title={autoOn ? "Pause auto-scroll" : "Start auto-scroll"}
+                className="grid size-10 shrink-0 place-items-center rounded-full bg-[var(--color-accent)] text-[var(--color-on-accent)] transition hover:bg-[var(--color-accent-hover)]">
+                {autoOn ? <PauseIcon size={16} /> : <PlayIcon size={16} />}
+              </button>
+              <div role="radiogroup" aria-label="Auto-scroll speed" className="tabular flex h-10 min-w-0 flex-1 rounded-full bg-[var(--color-panel-2)] p-1">
+                {AUTO_SCROLL_SPEEDS.map((s) => {
+                  const on = s === autoSpeed;
+                  return (
+                    <button key={s} type="button" role="radio" aria-checked={on} onClick={() => startAuto(s)}
+                      className={`min-w-0 flex-1 rounded-full text-[12.5px] font-semibold transition ${
+                        on ? "bg-[var(--color-panel)] text-[var(--color-text)] shadow-sm" : "text-[var(--color-dim)] hover:text-[var(--color-text)]"
+                      }`}>
+                      {speedLabel(s)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
           <div className="tabular flex items-center gap-3 text-[11px] font-medium text-[var(--color-dim)]">
             <span className="w-9">{Math.round(progress * 100)}%</span>
             <div className="h-1 flex-1 overflow-hidden rounded-full bg-[var(--color-border)]">
@@ -418,6 +477,10 @@ export function ComicReaderScreen(props: {
               <ListIcon size={18} />
               <span className="truncate">{chapter?.chapterNumber !== undefined ? `Chapter ${chapter.chapterNumber}` : "Chapters"}</span>
             </button>
+            <IconButton label="Auto-scroll" active={autoOpen || autoOn} aria-pressed={autoOpen}
+              onClick={() => { if (autoOpen) { setAutoOpen(false); setAutoOn(false); } else setAutoOpen(true); }}>
+              <AutoScrollIcon size={20} />
+            </IconButton>
             {canFullscreen ? (
               <IconButton label={fullscreen ? "Exit full screen" : "Full screen"} onClick={toggleFullscreen}>
                 {fullscreen ? <ShrinkIcon size={19} /> : <ExpandIcon size={19} />}
